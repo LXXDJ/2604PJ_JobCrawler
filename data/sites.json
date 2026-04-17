@@ -1,0 +1,46 @@
+[
+  {
+    "site_id": "hanin",
+    "crawler": "gnuboard_crawler",
+    "url": "http://www.hanin.or.kr/bbs/board.php?bo_table=Information",
+    "site_type": "gnuboard",
+    "added_at": "2026-04-17T07:12:31.999594+00:00",
+    "config": {
+      "platform": "gnuboard",
+      "base_url": "http://www.hanin.or.kr",
+      "bbs_url": "http://www.hanin.or.kr/bbs",
+      "board_table": "Information",
+      "theme": "nariya",
+      "selectors": {
+        "list_rows": "ul.na-table > li",
+        "subject_link": "a.na-subject",
+        "author": "span.sv_member",
+        "content": "div.view-content"
+      },
+      "parse_mode": "sr_only"
+    }
+  },
+  {
+    "site_id": "siemreap",
+    "crawler": "gnuboard_crawler",
+    "url": "https://siemreap.korean.net/bbs/board.php?bo_table=tb33",
+    "site_type": "gnuboard",
+    "added_at": "2026-04-17T07:12:37.075411+00:00",
+    "config": {
+      "platform": "gnuboard",
+      "base_url": "https://siemreap.korean.net",
+      "bbs_url": "https://siemreap.korean.net/bbs",
+      "board_table": "tb33",
+      "theme": "fz",
+      "selectors": {
+        "list_rows": "ul.fz_list > li",
+        "subject_link": "div.fz_subject > a",
+        "author": "span.sv_member",
+        "date": "div.fz_date",
+        "hit": "div.fz_hit",
+        "content": "#bo_v_con"
+      },
+      "parse_mode": "direct"
+    }
+  }
+]

@@ -82,7 +82,7 @@ DB_PATH = os.path.join(ROOT, "data", "jobs.db")
 
 # -- 동적 등록 사이트 저장소 --
 # `python main.py add <URL>` 로 등록된 사이트들이 여기 쌓임.
-# REGISTERED_CRAWLS(아래)는 하드코딩된 기본값, 이 파일은 자동 생성된 것들.
+# REGISTERED_CRAWLS(아래 import) 는 analyzer 로 자동 등록 불가능한 특수 사이트용.
 SITES_JSON_PATH = os.path.join(ROOT, "data", "sites.json")
 
 # -- 로그 디렉토리 --
@@ -102,60 +102,11 @@ SLACK_ENABLED = False
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 SLACK_ONLY_ISSUES = True     # True: 문제(warn/error) 있을 때만 전송 / False: 매 run마다 전송
 
-# -- 크롤링 설정 --
-# 각 사이트별 최대 페이지 수 (None이면 전체 수집)
-# 테스트 시 3~5 정도로 제한하면 빠름
-CAMHR_MAX_PAGES = 3
-GNUBOARD_MAX_PAGES = None  # 한인회 사이트들은 공고 적어서 전체 수집해도 빠름
-
-# -- 등록된 크롤링 대상 --
-# 각 항목: {site_id, crawler, config}
-# 나중에 이 리스트를 analyzer 결과에서 동적 생성할 예정
-REGISTERED_CRAWLS = [
-    {
-        "site_id": "camhr",
-        "crawler": "camhr_crawler",
-        "config": {"max_pages": CAMHR_MAX_PAGES},
-    },
-    {
-        "site_id": "hanin",
-        "crawler": "gnuboard_crawler",
-        "config": {
-            "max_pages": GNUBOARD_MAX_PAGES,
-            "platform": "gnuboard",
-            "base_url": "http://www.hanin.or.kr",
-            "board_table": "Information",
-            "theme": "nariya",
-            "parse_mode": "sr_only",
-            "selectors": {
-                "list_rows": "ul.na-table > li",
-                "subject_link": "a.na-subject",
-                "author": "span.sv_member",
-                "content": "div.view-content",
-            },
-        },
-    },
-    {
-        "site_id": "siemreap",
-        "crawler": "gnuboard_crawler",
-        "config": {
-            "max_pages": GNUBOARD_MAX_PAGES,
-            "platform": "gnuboard",
-            "base_url": "https://siemreap.korean.net",
-            "board_table": "tb33",
-            "theme": "fz",
-            "parse_mode": "direct",
-            "selectors": {
-                "list_rows": "ul.fz_list > li",
-                "subject_link": "div.fz_subject > a",
-                "author": "span.sv_member",
-                "date": "div.fz_date",
-                "hit": "div.fz_hit",
-                "content": "#bo_v_con",
-            },
-        },
-    },
-]
+# -- 등록된 크롤링 대상 (특수 사이트 전용) --
+# analyzer 로 자동 등록이 불가능한 사이트만 여기에 하드코딩.
+# 일반 gnuboard 같은 사이트는 `python main.py add <URL>` 로 등록 → data/sites.json 에 쌓임.
+# 상세: crawlers/hardcoded_crawls.py
+from hardcoded_crawls import REGISTERED_CRAWLS
 
 
 # ============================================================

@@ -3,6 +3,7 @@ __pycache__/
 .env
 venv/
 data/*.json
+!data/sites.json
 data/*.csv
 *.db
 logs/

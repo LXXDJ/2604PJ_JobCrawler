@@ -168,7 +168,7 @@ python main.py analyze <URL>
 # 2. 사이트 분석 + 자동 등록 — data/sites.json 에 크롤링 대상으로 추가
 python main.py add <URL>
 
-# 3. 등록된 사이트 크롤링 (REGISTERED_CRAWLS + sites.json 병합)
+# 3. 등록된 사이트 크롤링 (hardcoded_crawls.py + sites.json 병합)
 python main.py crawl
 
 # 4. DB 통계 확인
@@ -211,8 +211,8 @@ python main.py notify-test
 > 즉시 **Slack App 페이지 → Incoming Webhooks → Regenerate** 로 재발급.
 
 `add`가 등록을 거부하는 경우 (analyzer 신뢰도 부족 / 미지원 사이트 타입 / SPA여서 API 발견 단계 필요 등)
-는 콘솔에 이유가 출력된다. 거부된 사이트는 수동으로 `REGISTERED_CRAWLS`에 추가하거나
-Playwright 기반 API 자동 발견이 붙을 때까지 대기.
+는 콘솔에 이유가 출력된다. 거부된 사이트는 수동 크롤러를 작성한 뒤 [crawlers/hardcoded_crawls.py](crawlers/hardcoded_crawls.py)
+의 `REGISTERED_CRAWLS` 에 추가하거나, Playwright 기반 API 자동 발견이 붙을 때까지 대기.
 
 ### 매일 자동 실행 (Windows 작업 스케줄러)
 
