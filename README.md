@@ -12,12 +12,12 @@
 
 | 단계 | 대상 사이트 | 학습 내용 | 상태 |
 |------|------------|-----------|------|
-| Step 1 | 재캄보디아한인회 + 시엠립한인회 | 정적 크롤링, 설정 기반 멀티사이트 크롤러 | 완료 |
-| Step 2 | CamHR | 봇 탐지 우회 (Scrapling/Playwright), DB 저장, 증분 수집 | 예정 |
+| Step 1 | 재캄보디아한인회 + 시엠립한인회 | HTML 파싱 (requests + BeautifulSoup), 설정 기반 멀티사이트 | 완료 |
+| Step 2 | CamHR | API 크롤링, SPA 사이트 대응, Playwright 네트워크 캡처 | 완료 |
 
 ## 크롤링 대상
 
-### Step 1 - 캄보디아 한인 커뮤니티 (그누보드 기반)
+### Step 1 - 캄보디아 한인 커뮤니티 (그누보드 기반, HTML 파싱)
 
 | 사이트 | URL | 게시글 수 |
 |--------|-----|-----------|
@@ -26,10 +26,17 @@
 
 두 사이트 모두 그누보드 기반이지만 테마(CSS 클래스)가 다르다. 사이트별 설정을 `config.py`에 분리하여 하나의 크롤러(`gnuboard_crawler.py`)로 여러 사이트를 수집한다.
 
-### Step 2 - CamHR (예정)
+### Step 2 - CamHR (API 크롤링)
 
 - URL: https://www.camhr.com/
-- 캄보디아 최대 구인구직 사이트
+- 캄보디아 최대 구인구직 사이트 (1,800+ 공고)
+- Nuxt.js(Vue SSR) 기반 SPA — HTML에 데이터 없음
+- REST API를 직접 호출하여 수집
+
+API를 찾는 과정:
+1. Playwright로 브라우저를 띄워 네트워크 요청 캡처
+2. `api.camhr.com/v1.0.0/jobs/simple/page-query` 엔드포인트 발견
+3. API를 직접 호출하여 JSON 데이터 수집
 
 ## 프로젝트 구조
 
@@ -38,10 +45,12 @@
 ├── crawlers/
 │   ├── config.py              # 사이트별 크롤링 설정 (CSS 셀렉터 등)
 │   ├── gnuboard_crawler.py    # 그누보드 범용 크롤러 (설정 기반)
-│   └── hanin_crawler.py       # 한인회 단일 크롤러 (학습용 초기 버전)
+│   ├── hanin_crawler.py       # 한인회 단일 크롤러 (학습용 초기 버전)
+│   └── camhr_crawler.py       # CamHR API 크롤러
 ├── data/
 │   ├── hanin_jobs.json        # 한인회 수집 데이터
-│   └── siemreap_jobs.json     # 시엠립한인회 수집 데이터
+│   ├── siemreap_jobs.json     # 시엠립한인회 수집 데이터
+│   └── camhr_jobs.json        # CamHR 수집 데이터
 ├── requirements.txt
 ├── .gitignore
 └── README.md
@@ -53,13 +62,27 @@
 # 의존성 설치
 pip install -r requirements.txt
 
-# 전체 사이트 크롤링 (한인회 + 시엠립)
+# Step 1: 한인회 크롤러 (HTML 파싱)
 cd crawlers
 python gnuboard_crawler.py
+
+# Step 2: CamHR 크롤러 (API)
+python camhr_crawler.py
 ```
+
+## 크롤링 방식 비교
+
+| | Step 1 (HTML 파싱) | Step 2 (API 크롤링) |
+|---|---|---|
+| 대상 | 정적 HTML 사이트 | SPA (JavaScript 렌더링) |
+| 도구 | requests + BeautifulSoup | requests (API 직접 호출) |
+| 데이터 | HTML에서 태그/클래스로 추출 | JSON 응답을 그대로 사용 |
+| 속도 | 느림 (HTML 파싱 오버헤드) | 빠름 (필요한 데이터만) |
+| 난이도 | 사이트 구조 분석 필요 | API 엔드포인트 찾기 필요 |
 
 ## 수집 데이터 형식
 
+### Step 1 (한인회)
 ```json
 {
   "wr_id": "58",
@@ -68,43 +91,33 @@ python gnuboard_crawler.py
   "date": "2026.02.05",
   "hit": "83",
   "link": "http://www.hanin.or.kr/bbs/board.php?bo_table=Information&wr_id=58",
-  "content": "프놈펜한국국제학교에서 아래와 같이 중등 체육 시간 강사를 모집하오니...",
+  "content": "프놈펜한국국제학교에서 아래와 같이...",
   "source": "hanin",
   "crawled_at": "2026-04-14T17:05:08.522835"
 }
 ```
 
-## 새로운 그누보드 사이트 추가 방법
-
-`crawlers/config.py`에 설정을 추가하면 된다:
-
-```python
-NEW_SITE = {
-    "name": "new_site",
-    "description": "새 사이트 설명",
-    "base_url": "https://example.com",
-    "board_url": "https://example.com/bbs/board.php",
-    "board_table": "job",
-    "verify_ssl": True,
-    "selectors": {
-        "list_rows": "ul.fz_list > li",       # F12로 확인
-        "subject_link": "div.fz_subject > a",  # F12로 확인
-        "author": "span.sv_member",
-        "date": "div.fz_date",
-        "hit": "div.fz_hit",
-        "content": "#bo_v_con",
-        "total_info": "div.fz_total_count",
-    },
-    "parse_mode": "direct",
+### Step 2 (CamHR)
+```json
+{
+  "id": "10656655",
+  "title": "Sales Executive ($1,000 income) + High Bonus",
+  "company": "HEALTHY HOMES (CAMBODIA) CO., LTD",
+  "cities": "Phnom Penh",
+  "salary": "Negotiable",
+  "term": "Full Time",
+  "is_urgent": true,
+  "pub_date": "2026-04-02T00:00:00.000+0700",
+  "requirement": "...",
+  "description": "...",
+  "source": "camhr",
+  "crawled_at": "2026-04-14T18:30:00.000000"
 }
-
-SITES = [HANIN, SIEMREAP, NEW_SITE]  # 리스트에 추가
 ```
 
 ## 기술 스택
 
 - **Python 3.11**
 - **requests** - HTTP 요청
-- **BeautifulSoup4 + lxml** - HTML 파싱
-- (Step 2 예정) Scrapling, Playwright - 봇 탐지 우회 / 동적 페이지 처리
-- (Step 2 예정) SQLite - 증분 수집용 DB
+- **BeautifulSoup4 + lxml** - HTML 파싱 (Step 1)
+- **Playwright** - API 엔드포인트 탐색용 (Step 2)
