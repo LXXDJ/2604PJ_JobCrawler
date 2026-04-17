@@ -48,15 +48,58 @@ HTTP_RETRY_BACKOFF = 2.0     # 재시도 간 대기 배수 (1회 실패 시 N초
 DB_PATH = os.path.join(ROOT, "data", "jobs.db")
 
 # -- 크롤링 설정 --
-# CamHR 최대 페이지 수 (None이면 전체 수집)
+# 각 사이트별 최대 페이지 수 (None이면 전체 수집)
 # 테스트 시 3~5 정도로 제한하면 빠름
 CAMHR_MAX_PAGES = 3
+GNUBOARD_MAX_PAGES = None  # 한인회 사이트들은 공고 적어서 전체 수집해도 빠름
 
 # -- 등록된 크롤링 대상 --
-# 각 사이트는 (site_id, crawler_func, kwargs) 형태
-# 나중에 여기를 동적으로 — 분석기로 생성한 config에서 — 만들 수 있음
+# 각 항목: {site_id, crawler, config}
+# 나중에 이 리스트를 analyzer 결과에서 동적 생성할 예정
 REGISTERED_CRAWLS = [
-    ("camhr", "camhr_crawler", {}),  # camhr_crawler.crawl() 호출
+    {
+        "site_id": "camhr",
+        "crawler": "camhr_crawler",
+        "config": {"max_pages": CAMHR_MAX_PAGES},
+    },
+    {
+        "site_id": "hanin",
+        "crawler": "gnuboard_crawler",
+        "config": {
+            "max_pages": GNUBOARD_MAX_PAGES,
+            "platform": "gnuboard",
+            "base_url": "http://www.hanin.or.kr",
+            "board_table": "Information",
+            "theme": "nariya",
+            "parse_mode": "sr_only",
+            "selectors": {
+                "list_rows": "ul.na-table > li",
+                "subject_link": "a.na-subject",
+                "author": "span.sv_member",
+                "content": "div.view-content",
+            },
+        },
+    },
+    {
+        "site_id": "siemreap",
+        "crawler": "gnuboard_crawler",
+        "config": {
+            "max_pages": GNUBOARD_MAX_PAGES,
+            "platform": "gnuboard",
+            "base_url": "https://siemreap.korean.net",
+            "board_table": "tb33",
+            "theme": "fz",
+            "parse_mode": "direct",
+            "selectors": {
+                "list_rows": "ul.fz_list > li",
+                "subject_link": "div.fz_subject > a",
+                "author": "span.sv_member",
+                "date": "div.fz_date",
+                "hit": "div.fz_hit",
+                "content": "#bo_v_con",
+            },
+        },
+    },
 ]
 
 
@@ -113,16 +156,39 @@ def cmd_analyze(url: str):
 
 def cmd_crawl():
     """등록된 사이트들을 순차 크롤링"""
-    for site_id, module_name, kwargs in REGISTERED_CRAWLS:
+    http_config = {
+        "timeout": HTTP_TIMEOUT,
+        "max_retries": HTTP_MAX_RETRIES,
+        "retry_backoff": HTTP_RETRY_BACKOFF,
+    }
+
+    for entry in REGISTERED_CRAWLS:
+        site_id = entry["site_id"]
+        crawler_name = entry["crawler"]
+        config = entry["config"]
+        max_pages = config.get("max_pages")
+
         print(f"\n>>> 크롤링 시작: {site_id}")
 
-        if site_id == "camhr":
+        if crawler_name == "camhr_crawler":
             import camhr_crawler
             camhr_crawler.crawl(
                 db_path=DB_PATH,
-                max_pages=CAMHR_MAX_PAGES,
-                **kwargs,
+                max_pages=max_pages,
             )
+
+        elif crawler_name == "gnuboard_crawler":
+            import gnuboard_crawler
+            gnuboard_crawler.crawl(
+                site_id=site_id,
+                config=config,
+                db_path=DB_PATH,
+                max_pages=max_pages,
+                http_config=http_config,
+            )
+
+        else:
+            print(f"  [WARN] 알 수 없는 크롤러: {crawler_name}")
 
 
 def cmd_stats():
