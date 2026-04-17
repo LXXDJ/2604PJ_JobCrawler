@@ -60,12 +60,12 @@ load_dotenv(os.path.join(ROOT, ".env"))
 
 # -- LLM 분석 전략 사용 여부 --
 # False: 휴리스틱만 사용 (빠르고 무료, 알려진 패턴만 커버)
-# True : 휴리스틱 실패 시 LLM(Claude) 폴백 (느리지만 범용, API 비용)
+# True : 휴리스틱 실패 시 LLM(OpenAI) 폴백 (느리지만 범용, API 비용)
 USE_LLM = False
 
 # LLM 설정 (USE_LLM=True일 때만 사용)
-LLM_API_KEY = os.getenv("ANTHROPIC_API_KEY")  # 환경변수에서 읽음
-LLM_MODEL = "claude-sonnet-4-6"
+LLM_API_KEY = os.getenv("OPENAI_API_KEY")  # 환경변수에서 읽음
+LLM_MODEL = "gpt-4o-mini"
 
 # -- 분석 결과 신뢰도 임계값 --
 # 이 값보다 낮으면 유효하지 않다고 판단 (다음 전략 시도 or 실패)

@@ -22,14 +22,14 @@ class SiteAnalyzer:
         self,
         use_llm: bool = False,
         llm_api_key: Optional[str] = None,
-        llm_model: str = "claude-sonnet-4-6",
+        llm_model: str = "gpt-4o-mini",
         min_confidence: float = 0.5,
         strategies: Optional[List[AnalysisStrategy]] = None,
     ):
         """
         use_llm: LLM 전략 활성화 여부 (기본 False)
         llm_api_key: LLM API 키 (use_llm=True일 때 필요)
-        llm_model: 사용할 Claude 모델
+        llm_model: 사용할 LLM 모델 (OpenAI)
         min_confidence: 결과를 유효로 판단할 최소 신뢰도
         strategies: 커스텀 전략 목록 (미지정 시 기본 구성 사용)
         """

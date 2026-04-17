@@ -74,7 +74,7 @@
 ```
 
 - **휴리스틱 전략**: HTML에서 플랫폼 시그니처 탐지 (그누보드 전역변수, `__NUXT__`, `wp-content` 등), 알려진 테마의 CSS 셀렉터 매칭
-- **LLM 전략**: 휴리스틱이 실패한 사이트에 대해 Claude가 HTML 분석 → 셀렉터 추천 (현재 스텁만 존재, `USE_LLM=False`로 비활성)
+- **LLM 전략**: 휴리스틱이 실패한 사이트에 대해 OpenAI(GPT-4o-mini)가 HTML 분석 → 셀렉터 추천. 기본값 `USE_LLM=False` (API 비용 절약); 활성화하려면 [main.py](main.py#L64) 에서 `USE_LLM=True` + `.env` 에 `OPENAI_API_KEY` 설정.
 
 **지원하는 사이트 타입:**
 | 타입 | 식별 방법 | 자동 생성되는 config |
@@ -252,7 +252,6 @@ Playwright 기반 API 자동 발견이 붙을 때까지 대기.
 | 작업 | 내용 |
 |------|------|
 | Playwright 기반 API 자동 발견 | Nuxt/React SPA에서 네트워크 캡처로 API 엔드포인트 자동 탐지 |
-| LLM 전략 활성화 | 휴리스틱이 실패한 사이트에 대해 Claude 폴백 |
 
 ---
 
