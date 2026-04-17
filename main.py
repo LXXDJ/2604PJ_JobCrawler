@@ -61,7 +61,7 @@ load_dotenv(os.path.join(ROOT, ".env"))
 # -- LLM 분석 전략 사용 여부 --
 # False: 휴리스틱만 사용 (빠르고 무료, 알려진 패턴만 커버)
 # True : 휴리스틱 실패 시 LLM(OpenAI) 폴백 (느리지만 범용, API 비용)
-USE_LLM = False
+USE_LLM = True
 
 # LLM 설정 (USE_LLM=True일 때만 사용)
 LLM_API_KEY = os.getenv("OPENAI_API_KEY")  # 환경변수에서 읽음
