@@ -162,15 +162,53 @@
 ### 명령어
 
 ```bash
-# 1. 새 사이트 분석 — URL만 주면 크롤러 설정 자동 생성
+# 1. 새 사이트 분석 — URL만 주면 크롤러 설정 자동 생성 (저장 안 함, 출력만)
 python main.py analyze <URL>
 
-# 2. 등록된 사이트 크롤링
+# 2. 사이트 분석 + 자동 등록 — data/sites.json 에 크롤링 대상으로 추가
+python main.py add <URL>
+
+# 3. 등록된 사이트 크롤링 (REGISTERED_CRAWLS + sites.json 병합)
 python main.py crawl
 
-# 3. DB 통계 확인
+# 4. DB 통계 확인
 python main.py stats
 ```
+
+`add`가 등록을 거부하는 경우 (analyzer 신뢰도 부족 / 미지원 사이트 타입 / SPA여서 API 발견 단계 필요 등)
+는 콘솔에 이유가 출력된다. 거부된 사이트는 수동으로 `REGISTERED_CRAWLS`에 추가하거나
+Playwright 기반 API 자동 발견이 붙을 때까지 대기.
+
+### 매일 자동 실행 (Windows 작업 스케줄러)
+
+`crawl`을 매일 정해진 시간에 자동으로 돌리려면 **Windows 작업 스케줄러**에 등록.
+(APScheduler 같은 파이썬 상주 프로세스는 컴퓨터가 꺼지면 죽어서 부적합.)
+
+**실행 결과는 `logs/crawl-YYYYMMDD.log` 에 자동 저장됨** — 백그라운드 실행이라 콘솔 출력이 안 보여도 실행 이력/에러를 확인할 수 있음.
+
+#### 등록 절차
+
+1. **작업 스케줄러** 실행 (`Win + R` → `taskschd.msc`)
+2. 우측 패널 → **작업 만들기**
+3. **일반** 탭
+   - 이름: `JobCrawler Daily`
+   - **사용자가 로그온한 경우에만 실행** 선택 (로그아웃 상태 실행은 노트북 환경에선 권장 안 함)
+4. **트리거** 탭 → **새로 만들기**
+   - 매일 / 시작 시각: 예를 들어 03:00
+5. **동작** 탭 → **새로 만들기**
+   - 동작: **프로그램 시작**
+   - 프로그램/스크립트: 파이썬 실행 파일 전체 경로
+     (예: `C:\Users\<사용자>\AppData\Local\Programs\Python\Python311\python.exe` —
+     터미널에서 `where python` 으로 확인)
+   - 인수 추가: `main.py crawl`
+   - 시작 위치: 이 프로젝트의 절대 경로
+     (예: `C:\Users\<사용자>\OneDrive\Documents\code\2604PJ_JobCrawler`)
+6. **조건** 탭 — 노트북이면 체크 해제 권장
+   - **컴퓨터 AC 전원 사용 시에만 작업 시작** 해제 (배터리여도 돌게)
+7. 저장 후, 목록에서 해당 작업을 우클릭 → **실행** 으로 수동 트리거해서 정상 동작 확인
+8. 몇 분 뒤 `logs/crawl-<오늘날짜>.log` 파일이 생성됐는지 확인
+
+> 참고: 지정 시각에 PC가 꺼져 있으면 해당 날짜 실행은 스킵된다. "작업을 예약대로 시작하지 못한 경우 가능한 한 빨리 작업 시작" 옵션(**설정** 탭)을 켜면 부팅 후 자동으로 밀린 실행을 이어서 돌림.
 
 ---
 
@@ -179,10 +217,8 @@ python main.py stats
 | 작업 | 내용 |
 |------|------|
 | Playwright 기반 API 자동 발견 | Nuxt/React SPA에서 네트워크 캡처로 API 엔드포인트 자동 탐지 |
-| 분석기 → 크롤러 자동 연동 | analyze 결과 config를 바로 crawl에 전달 |
 | 헬스체크 | 주기 실행 시 수집 건수 급감, 구조 변경 등 자동 감지 |
 | LLM 전략 활성화 | 휴리스틱이 실패한 사이트에 대해 Claude 폴백 |
-| 스케줄러 | APScheduler 또는 cron으로 매일 자동 실행 |
 
 ---
 

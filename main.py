@@ -14,8 +14,35 @@ import os
 import sys
 import json
 import argparse
+import datetime
 
-sys.stdout.reconfigure(encoding="utf-8")
+if sys.stdout is not None:
+    sys.stdout.reconfigure(encoding="utf-8")
+
+
+class _Tee:
+    """
+    여러 스트림에 동시에 쓰는 file-like 객체.
+    cmd_crawl에서 콘솔 + 로그 파일에 같은 내용을 출력하기 위해 사용.
+    pythonw 등으로 콘솔이 없을 때 원본 stdout이 None이어도 안전하게 동작하도록 필터링.
+    """
+    def __init__(self, *streams):
+        self.streams = [s for s in streams if s is not None]
+
+    def write(self, data):
+        for s in self.streams:
+            try:
+                s.write(data)
+                s.flush()
+            except Exception:
+                pass
+
+    def flush(self):
+        for s in self.streams:
+            try:
+                s.flush()
+            except Exception:
+                pass
 
 # 프로젝트 내부 import 경로
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +78,11 @@ DB_PATH = os.path.join(ROOT, "data", "jobs.db")
 # `python main.py add <URL>` 로 등록된 사이트들이 여기 쌓임.
 # REGISTERED_CRAWLS(아래)는 하드코딩된 기본값, 이 파일은 자동 생성된 것들.
 SITES_JSON_PATH = os.path.join(ROOT, "data", "sites.json")
+
+# -- 로그 디렉토리 --
+# `crawl` 명령이 실행될 때마다 logs/crawl-YYYYMMDD.log 에 append된다.
+# Windows 작업 스케줄러로 백그라운드 실행할 때 실행 이력/에러 추적용.
+LOG_DIR = os.path.join(ROOT, "logs")
 
 # -- 크롤링 설정 --
 # 각 사이트별 최대 페이지 수 (None이면 전체 수집)
@@ -248,48 +280,79 @@ def cmd_add(url: str):
 
 
 def cmd_crawl():
-    """등록된 사이트들을 순차 크롤링 (REGISTERED_CRAWLS + sites.json 병합)"""
+    """
+    등록된 사이트들을 순차 크롤링 (REGISTERED_CRAWLS + sites.json 병합).
+
+    콘솔 + logs/crawl-YYYYMMDD.log 에 동시에 기록한다.
+    작업 스케줄러로 콘솔 없이 실행돼도 로그 파일로 실행 이력을 추적할 수 있음.
+    """
     import sites_registry
 
-    http_config = {
-        "timeout": HTTP_TIMEOUT,
-        "max_retries": HTTP_MAX_RETRIES,
-        "retry_backoff": HTTP_RETRY_BACKOFF,
-    }
+    os.makedirs(LOG_DIR, exist_ok=True)
+    started_at = datetime.datetime.now()
+    log_path = os.path.join(LOG_DIR, f"crawl-{started_at:%Y%m%d}.log")
+    log_file = open(log_path, "a", encoding="utf-8")
+    original_stdout = sys.stdout
+    sys.stdout = _Tee(original_stdout, log_file)
 
-    dynamic_entries = sites_registry.load_all(SITES_JSON_PATH)
-    all_entries = list(REGISTERED_CRAWLS) + dynamic_entries
+    try:
+        print(f"\n{'=' * 60}")
+        print(f"[{started_at:%Y-%m-%d %H:%M:%S}] crawl 시작")
+        print(f"{'=' * 60}")
 
-    print(f"크롤링 대상: 기본 {len(REGISTERED_CRAWLS)}개 + 동적 {len(dynamic_entries)}개 "
-          f"= 총 {len(all_entries)}개")
+        http_config = {
+            "timeout": HTTP_TIMEOUT,
+            "max_retries": HTTP_MAX_RETRIES,
+            "retry_backoff": HTTP_RETRY_BACKOFF,
+        }
 
-    for entry in all_entries:
-        site_id = entry["site_id"]
-        crawler_name = entry["crawler"]
-        config = entry["config"]
-        max_pages = config.get("max_pages")
+        dynamic_entries = sites_registry.load_all(SITES_JSON_PATH)
+        all_entries = list(REGISTERED_CRAWLS) + dynamic_entries
 
-        print(f"\n>>> 크롤링 시작: {site_id}")
+        print(f"크롤링 대상: 기본 {len(REGISTERED_CRAWLS)}개 + 동적 {len(dynamic_entries)}개 "
+              f"= 총 {len(all_entries)}개")
 
-        if crawler_name == "camhr_crawler":
-            import camhr_crawler
-            camhr_crawler.crawl(
-                db_path=DB_PATH,
-                max_pages=max_pages,
-            )
+        for entry in all_entries:
+            site_id = entry["site_id"]
+            crawler_name = entry["crawler"]
+            config = entry["config"]
+            max_pages = config.get("max_pages")
 
-        elif crawler_name == "gnuboard_crawler":
-            import gnuboard_crawler
-            gnuboard_crawler.crawl(
-                site_id=site_id,
-                config=config,
-                db_path=DB_PATH,
-                max_pages=max_pages,
-                http_config=http_config,
-            )
+            print(f"\n>>> 크롤링 시작: {site_id}")
 
-        else:
-            print(f"  [WARN] 알 수 없는 크롤러: {crawler_name}")
+            try:
+                if crawler_name == "camhr_crawler":
+                    import camhr_crawler
+                    camhr_crawler.crawl(
+                        db_path=DB_PATH,
+                        max_pages=max_pages,
+                    )
+
+                elif crawler_name == "gnuboard_crawler":
+                    import gnuboard_crawler
+                    gnuboard_crawler.crawl(
+                        site_id=site_id,
+                        config=config,
+                        db_path=DB_PATH,
+                        max_pages=max_pages,
+                        http_config=http_config,
+                    )
+
+                else:
+                    print(f"  [WARN] 알 수 없는 크롤러: {crawler_name}")
+
+            except Exception as e:
+                # 한 사이트 실패가 전체 crawl을 중단시키지 않게.
+                # 스케줄러로 매일 돌 때는 한 사이트가 죽어도 나머지는 돌아야 함.
+                print(f"  [ERROR] {site_id} 크롤링 실패: {type(e).__name__}: {e}")
+
+        finished_at = datetime.datetime.now()
+        elapsed = finished_at - started_at
+        print(f"\n[{finished_at:%Y-%m-%d %H:%M:%S}] crawl 완료 (소요 {elapsed})")
+
+    finally:
+        sys.stdout = original_stdout
+        log_file.close()
 
 
 def cmd_stats():

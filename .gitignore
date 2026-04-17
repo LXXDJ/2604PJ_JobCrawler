@@ -5,3 +5,4 @@ venv/
 data/*.json
 data/*.csv
 *.db
+logs/
