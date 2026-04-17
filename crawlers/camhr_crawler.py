@@ -1,41 +1,32 @@
 """
-CamHR 크롤러 (API 기반)
+CamHR 크롤러 (API 기반) — DB 저장 + 증분 수집
+
 - 사이트: https://www.camhr.com/
-- 방식: REST API 직접 호출 (브라우저 렌더링 불필요)
+- 방식: REST API 직접 호출
 - API 엔드포인트: https://api.camhr.com/v1.0.0/jobs/simple/page-query
 - 상세 API: https://api.camhr.com/v1.0.0/jobs/{id}
 
-CamHR은 Nuxt.js(Vue SSR) 기반 SPA로, HTML에 데이터가 없고
-JavaScript가 API를 호출해서 채용공고를 동적으로 로딩한다.
-
-이런 사이트를 크롤링하는 방법은 2가지:
-  1) Playwright/Selenium으로 브라우저를 띄워서 JS 실행 후 HTML 파싱
-  2) API를 직접 찾아서 호출 (더 빠르고 효율적) ← 이 방식 사용
-
-API를 찾는 방법:
-  - 브라우저 개발자도구 > Network 탭에서 XHR/Fetch 요청 확인
-  - 또는 Playwright로 네트워크 요청 캡처 (camhr_api_finder.py 참고)
+증분 수집:
+  - 매일 실행 시 목록 API로 전체 공고를 조회
+  - 기존 DB에 있는 공고는 last_seen_at만 갱신
+  - 신규 공고는 INSERT (상세 정보도 함께 수집)
+  - 이렇게 하면 상세 API 호출이 최소화되어 빠르고 예의 바름
 """
 
 import requests
-import json
 import time
 import os
 import sys
-from datetime import datetime
 
 sys.stdout.reconfigure(encoding="utf-8")
 
+from database import JobDatabase
 
-# ============================================================
-# API 설정
-# ============================================================
 
 API_BASE = "https://api.camhr.com/v1.0.0"
 LIST_API = f"{API_BASE}/jobs/simple/page-query"
-DETAIL_API = f"{API_BASE}/jobs"  # + /{job_id}
+DETAIL_API = f"{API_BASE}/jobs"
 
-# 브라우저처럼 보이기 위한 헤더
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -43,29 +34,17 @@ HEADERS = {
     "Accept": "application/json",
 }
 
-# 한 페이지당 가져올 공고 수 (API 기본값 15, 최대 테스트 필요)
-PAGE_SIZE = 15
+PAGE_SIZE = 50  # 한 페이지당 공고 수 (API 기본값보다 크게 — 전체 페이지 수 감소)
+
+SOURCE_NAME = "camhr"
 
 
 # ============================================================
-# 목록 API 호출
+# API 호출
 # ============================================================
 
 def fetch_job_list(page=1, size=PAGE_SIZE):
-    """
-    채용공고 목록을 API로 가져온다.
-
-    응답 구조:
-    {
-        "data": {
-            "page": 1,
-            "size": 15,
-            "totalCount": "1807",
-            "totalPage": 121,
-            "result": [ { "id": "...", "title": "...", ... }, ... ]
-        }
-    }
-    """
+    """채용공고 목록 API 호출"""
     response = requests.get(
         LIST_API,
         params={"page": page, "size": size},
@@ -76,17 +55,8 @@ def fetch_job_list(page=1, size=PAGE_SIZE):
     return response.json()
 
 
-# ============================================================
-# 상세 API 호출
-# ============================================================
-
 def fetch_job_detail(job_id):
-    """
-    채용공고 상세 정보를 API로 가져온다.
-
-    응답에 requirement(자격요건), description(상세설명) 등
-    목록에는 없는 상세 정보가 포함되어 있다.
-    """
+    """채용공고 상세 API 호출"""
     response = requests.get(
         f"{DETAIL_API}/{job_id}",
         headers=HEADERS,
@@ -97,131 +67,173 @@ def fetch_job_detail(job_id):
 
 
 # ============================================================
-# 데이터 정제
+# 데이터 정제 (DB 스키마에 맞게 변환)
 # ============================================================
 
-def parse_list_item(item):
-    """목록 API 응답의 각 항목을 정제한다."""
+def item_to_job(item, detail_data=None):
+    """
+    API 응답 항목을 DB 스키마 형식으로 변환한다.
+
+    item: 목록 API의 각 result 항목
+    detail_data: 상세 API 응답의 data 부분 (신규 공고에만 필요)
+    """
     employer = item.get("employer", {})
     salary = item.get("salaryId", {})
     term = item.get("termId", {})
 
-    return {
-        "id": item.get("id", ""),
+    job = {
+        "source": SOURCE_NAME,
+        "external_id": item.get("id", ""),
         "title": item.get("title", ""),
         "company": employer.get("company", ""),
-        "employer_id": employer.get("employerId", ""),
-        "cities": item.get("cities", ""),
-        "salary": salary.get("label", ""),
-        "term": term.get("label", ""),  # Full Time, Part Time 등
-        "is_urgent": item.get("isurgent", False),
-        "is_new": item.get("newJob", False),
+        "location": item.get("cities", ""),
+        "salary": salary.get("label", "").strip(),
+        "job_type": term.get("label", ""),
         "pub_date": item.get("pubdate", ""),
         "link": f"https://www.camhr.com/a/job/{item.get('id', '')}",
-        "source": "camhr",
+        "content": "",
+        "raw_data": item,  # 목록 API의 원본 데이터 전부 보관
     }
 
+    # 상세 정보가 있으면 content 필드에 채움
+    if detail_data:
+        requirement = detail_data.get("requirement", "") or ""
+        description = detail_data.get("description", "") or ""
+        job["content"] = (description + "\n\n[요구사항]\n" + requirement).strip()
+        # 상세 정보도 raw_data에 포함
+        job["raw_data"] = {
+            "list": item,
+            "detail": detail_data,
+        }
 
-def parse_detail(data):
-    """상세 API 응답에서 추가 정보를 추출한다."""
-    detail = data.get("data", {})
-    return {
-        "requirement": detail.get("requirement", ""),
-        "description": detail.get("description", ""),
-        "address": detail.get("address", ""),
-        "web_url": detail.get("weburl", ""),
-        "hirelings": detail.get("hirelings", 0),  # 채용 인원
-        "work_years": detail.get("workyears", 0),  # 경력 요구
-        "close_date": detail.get("closeDate", ""),
-    }
+    return job
 
 
 # ============================================================
-# 전체 크롤링 실행
+# 크롤링 실행
 # ============================================================
 
-def crawl_all(max_pages=None):
+def crawl(db_path="data/jobs.db", max_pages=None, fetch_detail_for_new=True):
     """
-    CamHR 전체 크롤링.
+    CamHR 크롤링 + DB 저장.
 
-    max_pages: 크롤링할 최대 페이지 수 (None이면 전체)
-               테스트 시 max_pages=3 등으로 제한 가능
+    max_pages: 최대 페이지 수 (None이면 전체)
+    fetch_detail_for_new: True면 신규 공고에 한해 상세 API도 호출
     """
     print("=" * 60)
-    print("CamHR 크롤러 시작")
+    print("CamHR 크롤러 시작 (DB 저장 모드)")
     print("=" * 60)
 
-    # 1) 첫 페이지로 전체 규모 파악
-    print("\n[1] 목록 API 호출 중...")
-    first_response = fetch_job_list(page=1)
-    data = first_response.get("data", {})
-    total_count = int(data.get("totalCount", 0))
-    total_pages = data.get("totalPage", 0)
-    print(f"    전체 공고: {total_count}건, {total_pages}페이지")
+    # DB 초기화
+    db = JobDatabase(db_path)
+    db.init_schema()
 
-    if max_pages:
-        total_pages = min(total_pages, max_pages)
-        print(f"    (max_pages={max_pages}로 제한)")
+    # 크롤링 실행 로그 시작
+    run_id = db.start_crawl_run(SOURCE_NAME)
 
-    # 2) 모든 페이지 순회
-    all_posts = []
+    new_count = 0
+    updated_count = 0
+    error_msg = None
 
-    for page in range(1, total_pages + 1):
-        print(f"\n[2] {page}/{total_pages} 페이지 수집 중...")
+    try:
+        # 1) 첫 페이지 → 전체 규모 파악
+        print("\n[1] 목록 API 호출 중...")
+        first_response = fetch_job_list(page=1)
+        first_data = first_response.get("data", {})
+        total_count = int(first_data.get("totalCount", 0))
+        total_pages = first_data.get("totalPage", 0)
+        print(f"    전체 공고: {total_count}건, {total_pages}페이지 (size={PAGE_SIZE})")
 
-        if page == 1:
-            response_data = data
-        else:
-            response = fetch_job_list(page=page)
-            response_data = response.get("data", {})
-            time.sleep(0.5)  # API이므로 대기 시간 짧게
+        if max_pages:
+            total_pages = min(total_pages, max_pages)
+            print(f"    (max_pages={max_pages}로 제한)")
 
-        results = response_data.get("result", [])
-        print(f"    {len(results)}건 발견")
+        # 2) 모든 페이지 순회
+        for page in range(1, total_pages + 1):
+            if page == 1:
+                response_data = first_data
+            else:
+                response = fetch_job_list(page=page)
+                response_data = response.get("data", {})
+                time.sleep(0.3)
 
-        for item in results:
-            post = parse_list_item(item)
-            all_posts.append(post)
+            results = response_data.get("result", [])
+            print(f"\n[2] {page}/{total_pages} 페이지 — {len(results)}건 처리 중...")
 
-    print(f"\n    총 {len(all_posts)}건 목록 수집 완료")
+            for item in results:
+                job_id = item.get("id", "")
 
-    # 3) 상세 페이지 크롤링 (처음 10건만 — 전체는 시간이 오래 걸림)
-    detail_limit = min(10, len(all_posts))
-    print(f"\n[3] 상세 정보 수집 중 (상위 {detail_limit}건)...")
+                # 이미 DB에 있는지 체크 — 빠른 확인용
+                existing = _check_exists(db, SOURCE_NAME, job_id)
 
-    for i in range(detail_limit):
-        post = all_posts[i]
-        print(f"    ({i+1}/{detail_limit}) {post['title'][:50]}...")
+                if existing:
+                    # 기존 공고 — last_seen_at만 갱신
+                    job = item_to_job(item)
+                    db.upsert_job(job)
+                    updated_count += 1
+                else:
+                    # 신규 공고 — 상세 API도 호출
+                    detail_data = None
+                    if fetch_detail_for_new:
+                        try:
+                            detail_response = fetch_job_detail(job_id)
+                            detail_data = detail_response.get("data", {})
+                            time.sleep(0.3)
+                        except Exception as e:
+                            print(f"      [WARN] 상세 정보 실패 ({job_id}): {e}")
 
-        try:
-            detail_response = fetch_job_detail(post["id"])
-            detail_data = parse_detail(detail_response)
-            post.update(detail_data)
-        except Exception as e:
-            print(f"    [ERROR] 상세 정보 실패: {e}")
+                    job = item_to_job(item, detail_data)
+                    db.upsert_job(job)
+                    new_count += 1
+                    print(f"      [NEW] {job['title'][:50]}")
 
-        post["crawled_at"] = datetime.now().isoformat()
-        time.sleep(0.5)
+            print(f"    누적: 신규 {new_count}, 기존 {updated_count}")
 
-    # 나머지는 상세 없이 crawled_at만 추가
-    for post in all_posts[detail_limit:]:
-        post["crawled_at"] = datetime.now().isoformat()
+        db.finish_crawl_run(run_id, new_count, updated_count)
 
-    # 4) 저장
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-    os.makedirs(data_dir, exist_ok=True)
+    except Exception as e:
+        error_msg = str(e)
+        db.finish_crawl_run(run_id, new_count, updated_count, error=error_msg)
+        raise
 
-    output_path = os.path.join(data_dir, "camhr_jobs.json")
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(all_posts, f, ensure_ascii=False, indent=2)
+    # 결과 요약
+    print(f"\n{'='*60}")
+    print(f"CamHR 크롤링 완료")
+    print(f"  신규: {new_count}건 / 기존 재확인: {updated_count}건")
+    print(f"  DB: {db_path}")
+    print(f"{'='*60}")
 
-    print(f"\n[4] 저장 완료: {output_path}")
-    print(f"    총 {len(all_posts)}건 (상세 정보: {detail_limit}건)")
-    print("=" * 60)
+    # 통계 출력
+    stats = db.get_stats()
+    print("\n[전체 DB 현황]")
+    for s in stats:
+        print(f"  [{s['source']}] {s['count']}건 "
+              f"(첫 수집: {s['first_seen'][:10]}, 최신: {s['last_seen'][:10]})")
 
-    return all_posts
+    return {"new": new_count, "updated": updated_count}
+
+
+def _check_exists(db, source, external_id):
+    """DB에 이미 있는지 빠르게 확인"""
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM jobs WHERE source = ? AND external_id = ? LIMIT 1",
+            (source, external_id)
+        ).fetchone()
+        return row is not None
 
 
 if __name__ == "__main__":
-    # 테스트: 3페이지만 (45건)
-    crawl_all(max_pages=3)
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max-pages", type=int, default=None,
+                        help="최대 페이지 수 (테스트용, 미지정 시 전체)")
+    parser.add_argument("--db", type=str, default=None,
+                        help="DB 파일 경로 (기본: data/jobs.db)")
+    args = parser.parse_args()
+
+    # 프로젝트 루트 기준 경로
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    db_path = args.db or os.path.join(project_root, "data", "jobs.db")
+
+    crawl(db_path=db_path, max_pages=args.max_pages)
