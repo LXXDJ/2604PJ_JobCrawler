@@ -19,6 +19,7 @@ class SiteType(Enum):
     SPA_REACT = "spa_react"        # React SPA
     WORDPRESS = "wordpress"        # WordPress
     STATIC_HTML = "static_html"    # 단순 정적 HTML
+    API_DISCOVERED = "api_discovered"  # SPA 내부 API 가 Playwright 로 발견된 상태 — 수동 어댑터 필요
     UNKNOWN = "unknown"            # 식별 실패
 
 

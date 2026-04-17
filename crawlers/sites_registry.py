@@ -128,9 +128,11 @@ def can_register(analysis_result) -> tuple[bool, str]:
 
     거부 조건:
       1. confidence 부족 or 타입 미상 (is_valid=False)
-      2. needs_playwright_discovery: True  (Nuxt 등 — 아직 API 발견 단계 없음)
-      3. 해당 site_type용 크롤러 미구현
-      4. gnuboard인데 selectors 비어있음 (알려지지 않은 테마)
+      2. api_discovered — Playwright 로 API 를 찾았지만 자동 크롤링은 미구현.
+         사람이 hardcoded_crawls.py 에 어댑터를 짜야 함. (콘솔에 후보 API 출력)
+      3. needs_playwright_discovery: True  (SPA 인데 Playwright 도 실패한 경우)
+      4. 해당 site_type용 크롤러 미구현
+      5. gnuboard인데 selectors 비어있음 (알려지지 않은 테마)
 
     Returns: (ok, reason)
     """
@@ -146,16 +148,25 @@ def can_register(analysis_result) -> tuple[bool, str]:
     site_type_value = analysis_result.site_type.value
 
     # 2.
-    if config.get("needs_playwright_discovery"):
+    if site_type_value == "api_discovered":
+        endpoint = config.get("api_endpoint", "?")
         return False, (
-            "Nuxt/SPA 사이트 — Playwright 기반 API 자동 발견 단계 필요 (아직 미구현)"
+            f"API 엔드포인트를 자동 발견함: {endpoint}\n"
+            f"      → 자동 크롤링은 미구현. crawlers/hardcoded_crawls.py 에 어댑터 추가 필요.\n"
+            f"      → 상위 후보 / 응답 샘플은 아래 config 참조."
         )
 
     # 3.
+    if config.get("needs_playwright_discovery"):
+        return False, (
+            "SPA 사이트 — Playwright 자동 발견이 후보 API 를 찾지 못함 (수동 분석 필요)"
+        )
+
+    # 4.
     if site_type_value not in SITE_TYPE_TO_CRAWLER:
         return False, f"사이트 타입 '{site_type_value}'용 범용 크롤러가 아직 없음"
 
-    # 4.
+    # 5.
     if site_type_value == "gnuboard" and not config.get("selectors"):
         return False, "selectors 비어있음 — 알려지지 않은 그누보드 테마 (수동 지정 필요)"
 

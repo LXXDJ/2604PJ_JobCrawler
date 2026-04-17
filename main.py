@@ -67,6 +67,13 @@ USE_LLM = True
 LLM_API_KEY = os.getenv("OPENAI_API_KEY")  # 환경변수에서 읽음
 LLM_MODEL = "gpt-4o-mini"
 
+# -- Playwright API 자동 발견 --
+# True : heuristic 이 SPA (Nuxt/Next/Vue/React) 로 판정한 경우에 한해
+#        헤드리스 Chromium 을 띄워 내부 API 엔드포인트 후보를 자동으로 스니핑.
+#        결과는 "수동 어댑터 작성용 재료" — 자동 크롤링은 안 함.
+# False: SPA 는 그대로 거부 (사람이 개발자도구로 API 찾아서 hardcoded_crawls.py 에 등록)
+USE_PLAYWRIGHT_DISCOVERY = True
+
 # -- 분석 결과 신뢰도 임계값 --
 # 이 값보다 낮으면 유효하지 않다고 판단 (다음 전략 시도 or 실패)
 MIN_CONFIDENCE = 0.5
@@ -116,7 +123,11 @@ from hardcoded_crawls import REGISTERED_CRAWLS
 def cmd_analyze(url: str):
     """사이트 분석 명령 — URL을 받아서 config 생성"""
     from analyzer import SiteAnalyzer
-    from analyzer.strategies import HeuristicStrategy, LLMStrategy
+    from analyzer.strategies import (
+        HeuristicStrategy,
+        LLMStrategy,
+        PlaywrightDiscoveryStrategy,
+    )
 
     analyzer = SiteAnalyzer(
         use_llm=USE_LLM,
@@ -130,6 +141,7 @@ def cmd_analyze(url: str):
                 max_retries=HTTP_MAX_RETRIES,
                 retry_backoff=HTTP_RETRY_BACKOFF,
             ),
+            PlaywrightDiscoveryStrategy(enabled=USE_PLAYWRIGHT_DISCOVERY),
             LLMStrategy(
                 enabled=USE_LLM,
                 api_key=LLM_API_KEY,
@@ -168,7 +180,11 @@ def cmd_add(url: str):
     등록 거부되는 경우는 sites_registry.can_register 참조.
     """
     from analyzer import SiteAnalyzer
-    from analyzer.strategies import HeuristicStrategy, LLMStrategy
+    from analyzer.strategies import (
+        HeuristicStrategy,
+        LLMStrategy,
+        PlaywrightDiscoveryStrategy,
+    )
     import sites_registry
 
     analyzer = SiteAnalyzer(
@@ -183,6 +199,7 @@ def cmd_add(url: str):
                 max_retries=HTTP_MAX_RETRIES,
                 retry_backoff=HTTP_RETRY_BACKOFF,
             ),
+            PlaywrightDiscoveryStrategy(enabled=USE_PLAYWRIGHT_DISCOVERY),
             LLMStrategy(enabled=USE_LLM, api_key=LLM_API_KEY, model=LLM_MODEL),
         ],
     )
