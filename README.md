@@ -176,6 +176,9 @@ python main.py stats
 
 # 5. 헬스체크 — 등록된 사이트의 크롤링 건강 상태 리포트
 python main.py health
+
+# 6. Slack webhook 연결 검증 — 더미 알림 1회 전송 (SLACK_WEBHOOK_URL 필수)
+python main.py notify-test
 ```
 
 **헬스체크가 감지하는 것** (crawl_runs 이력 기반):
@@ -185,6 +188,27 @@ python main.py health
 - **스테일**: 마지막 성공이 1일 이상 전 (스케줄러가 안 도는 중)
 
 `crawl`이 끝날 때도 같은 리포트가 자동으로 찍혀서 로그 파일에 남음 — 매일 자동 실행 시 아침에 로그 파일 맨 아래만 확인하면 됨.
+
+### Slack 알림 (선택)
+
+헬스체크 결과를 Slack으로 푸시하려면:
+
+1. Slack에서 **Incoming Webhook** 생성 (https://api.slack.com/messaging/webhooks)
+   - App 생성 → Incoming Webhooks ON → 채널 선택 → webhook URL 발급
+2. webhook URL을 `.env` 파일에 등록 (프로젝트 루트):
+   ```
+   SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T.../B.../xxx
+   ```
+   (`.env.example` 파일을 복사해서 쓰면 됨 — `.env`는 `.gitignore` 처리됨)
+3. `main.py` 상단에서 `SLACK_ENABLED = True` 로 변경
+4. 연결 검증: `python main.py notify-test` — 더미 알림 1회 전송. Slack 채널에 떴으면 성공.
+
+관련 설정:
+- `SLACK_ONLY_ISSUES` (기본 True): 문제 있을 때만 알림 / False면 정상 run도 매번 전송
+- webhook 전송 실패해도 crawl은 정상 종료 (에러는 로그에만 기록)
+
+> **URL 유출 주의**: webhook URL은 비밀번호와 동급. 실수로 커밋하거나 공유했다면
+> 즉시 **Slack App 페이지 → Incoming Webhooks → Regenerate** 로 재발급.
 
 `add`가 등록을 거부하는 경우 (analyzer 신뢰도 부족 / 미지원 사이트 타입 / SPA여서 API 발견 단계 필요 등)
 는 콘솔에 이유가 출력된다. 거부된 사이트는 수동으로 `REGISTERED_CRAWLS`에 추가하거나
@@ -228,7 +252,6 @@ Playwright 기반 API 자동 발견이 붙을 때까지 대기.
 | 작업 | 내용 |
 |------|------|
 | Playwright 기반 API 자동 발견 | Nuxt/React SPA에서 네트워크 캡처로 API 엔드포인트 자동 탐지 |
-| Slack 알림 | 헬스체크 결과를 Slack webhook으로 전송 (현재는 로그 파일에만 기록) |
 | LLM 전략 활성화 | 휴리스틱이 실패한 사이트에 대해 Claude 폴백 |
 
 ---

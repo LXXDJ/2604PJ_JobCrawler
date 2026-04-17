@@ -16,6 +16,8 @@ import json
 import argparse
 import datetime
 
+from dotenv import load_dotenv
+
 if sys.stdout is not None:
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -47,6 +49,10 @@ class _Tee:
 # 프로젝트 내부 import 경로
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "crawlers"))
+
+# .env 자동 로드 (프로젝트 루트의 .env 파일에서 환경변수 읽음).
+# 파일 없으면 조용히 넘어감 — OS 환경변수만 쓰는 경우도 허용.
+load_dotenv(os.path.join(ROOT, ".env"))
 
 # ============================================================
 # [SETTINGS] — 이 섹션만 수정하면 동작이 바뀜
@@ -83,6 +89,18 @@ SITES_JSON_PATH = os.path.join(ROOT, "data", "sites.json")
 # `crawl` 명령이 실행될 때마다 logs/crawl-YYYYMMDD.log 에 append된다.
 # Windows 작업 스케줄러로 백그라운드 실행할 때 실행 이력/에러 추적용.
 LOG_DIR = os.path.join(ROOT, "logs")
+
+# -- Slack 알림 --
+# cmd_crawl 끝의 헬스체크 결과를 Slack webhook으로 전송.
+# 실제 알림 받기 시작할 준비가 되면 SLACK_ENABLED=True 로 바꾸고 환경변수 세팅.
+#   1) Slack에서 Incoming Webhook 활성화 → webhook URL 발급
+#      (https://api.slack.com/messaging/webhooks)
+#   2) 환경변수로 등록:
+#      Windows: setx SLACK_WEBHOOK_URL "https://hooks.slack.com/services/..."
+#      bash   : export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
+SLACK_ENABLED = False
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+SLACK_ONLY_ISSUES = True     # True: 문제(warn/error) 있을 때만 전송 / False: 매 run마다 전송
 
 # -- 크롤링 설정 --
 # 각 사이트별 최대 페이지 수 (None이면 전체 수집)
@@ -368,6 +386,23 @@ def cmd_crawl():
             print()
             # show_ok=False: 자동 리포트는 문제만 간결하게
             print(healthcheck.format_text(report, show_ok=False))
+
+            # Slack 알림 (설정에서 꺼져있으면 스킵)
+            if SLACK_ENABLED:
+                if not SLACK_WEBHOOK_URL:
+                    print("      [WARN] SLACK_ENABLED=True 이지만 "
+                          "SLACK_WEBHOOK_URL 환경변수가 없음 — 전송 스킵")
+                else:
+                    import slack_notifier
+                    sent = slack_notifier.send(
+                        SLACK_WEBHOOK_URL, report,
+                        only_issues=SLACK_ONLY_ISSUES,
+                    )
+                    if sent:
+                        print("      [Slack] 알림 전송됨")
+                    elif SLACK_ONLY_ISSUES and not report.has_issues:
+                        print("      [Slack] 정상 상태 — 전송 스킵 (SLACK_ONLY_ISSUES=True)")
+
         except Exception as e:
             print(f"\n[WARN] 헬스체크 실행 실패: {type(e).__name__}: {e}")
 
@@ -387,6 +422,51 @@ def cmd_health():
     db = JobDatabase(DB_PATH)
     report = healthcheck.analyze(db, site_ids)
     print(healthcheck.format_text(report, show_ok=True))
+
+
+def cmd_notify_test():
+    """
+    Slack webhook 연결 검증 — 가짜 HealthReport를 한 번 전송.
+
+    crawl을 기다릴 필요 없이 SLACK_WEBHOOK_URL 세팅이 제대로 됐는지 바로 확인 가능.
+    webhook URL 바꿀 때마다 재검증하기 좋음.
+    """
+    import slack_notifier
+    from healthcheck import HealthReport, SiteHealth
+
+    if not SLACK_WEBHOOK_URL:
+        print("[ERROR] SLACK_WEBHOOK_URL 환경변수가 없음.")
+        print("        .env 파일에 SLACK_WEBHOOK_URL=... 추가하거나 OS 환경변수로 등록.")
+        sys.exit(1)
+
+    report = HealthReport(
+        generated_at=datetime.datetime.now().isoformat(timespec="seconds"),
+        sites=[
+            SiteHealth(
+                site_id="notify-test-error",
+                status="error",
+                issues=["(테스트) 크롤러 예외 시뮬레이션", "최근 3회 중 3회 에러"],
+                last_error="TestError: connection refused",
+                recent_error_count=3,
+            ),
+            SiteHealth(
+                site_id="notify-test-warn",
+                status="warn",
+                issues=["(테스트) 수집량 급감 시뮬레이션 (50건 < 평균 200의 50%)"],
+                recent_total=50,
+                avg_total_prior=200.0,
+            ),
+            SiteHealth(site_id="notify-test-ok", status="ok", issues=[]),
+        ],
+    )
+
+    print("Slack 전송 시도 중 (only_issues=False — 테스트니까 무조건 전송)...")
+    sent = slack_notifier.send(SLACK_WEBHOOK_URL, report, only_issues=False)
+    if sent:
+        print("[OK] 전송 성공 — Slack 채널에서 메시지 확인.")
+    else:
+        print("[FAIL] 전송 실패 — 위 [WARN] 로그 참조.")
+        sys.exit(1)
 
 
 def cmd_stats():
@@ -433,6 +513,7 @@ def main():
     subparsers.add_parser("crawl", help="등록된 사이트 크롤링")
     subparsers.add_parser("stats", help="DB 통계")
     subparsers.add_parser("health", help="등록 사이트 건강 상태 점검 (에러/0건/급감/스테일)")
+    subparsers.add_parser("notify-test", help="Slack webhook 연결 검증 — 더미 알림 1회 전송")
 
     args = parser.parse_args()
 
@@ -446,6 +527,8 @@ def main():
         cmd_stats()
     elif args.command == "health":
         cmd_health()
+    elif args.command == "notify-test":
+        cmd_notify_test()
 
 
 if __name__ == "__main__":
