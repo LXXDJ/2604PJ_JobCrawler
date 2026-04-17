@@ -279,14 +279,23 @@ def cmd_add(url: str):
     print(f"      이제 `python main.py crawl` 실행 시 함께 수집됨.")
 
 
+def _collect_all_entries():
+    """REGISTERED_CRAWLS + sites.json 병합 (crawl / health 공통)"""
+    import sites_registry
+    dynamic = sites_registry.load_all(SITES_JSON_PATH)
+    return list(REGISTERED_CRAWLS) + dynamic
+
+
 def cmd_crawl():
     """
     등록된 사이트들을 순차 크롤링 (REGISTERED_CRAWLS + sites.json 병합).
 
     콘솔 + logs/crawl-YYYYMMDD.log 에 동시에 기록한다.
-    작업 스케줄러로 콘솔 없이 실행돼도 로그 파일로 실행 이력을 추적할 수 있음.
+    끝에 헬스체크 리포트를 자동으로 덧붙임 (스케줄러로 돌면 여기가 유일한 알림 수단).
     """
     import sites_registry
+    from database import JobDatabase
+    import healthcheck
 
     os.makedirs(LOG_DIR, exist_ok=True)
     started_at = datetime.datetime.now()
@@ -311,6 +320,8 @@ def cmd_crawl():
 
         print(f"크롤링 대상: 기본 {len(REGISTERED_CRAWLS)}개 + 동적 {len(dynamic_entries)}개 "
               f"= 총 {len(all_entries)}개")
+
+        site_ids = [e["site_id"] for e in all_entries]
 
         for entry in all_entries:
             site_id = entry["site_id"]
@@ -350,9 +361,32 @@ def cmd_crawl():
         elapsed = finished_at - started_at
         print(f"\n[{finished_at:%Y-%m-%d %H:%M:%S}] crawl 완료 (소요 {elapsed})")
 
+        # 자동 헬스체크 리포트 — 스케줄러로 돌 때 문제를 놓치지 않으려면 필수
+        try:
+            db = JobDatabase(DB_PATH)
+            report = healthcheck.analyze(db, site_ids)
+            print()
+            # show_ok=False: 자동 리포트는 문제만 간결하게
+            print(healthcheck.format_text(report, show_ok=False))
+        except Exception as e:
+            print(f"\n[WARN] 헬스체크 실행 실패: {type(e).__name__}: {e}")
+
     finally:
         sys.stdout = original_stdout
         log_file.close()
+
+
+def cmd_health():
+    """수동 헬스체크 — 등록된 모든 사이트의 상태 리포트 출력"""
+    from database import JobDatabase
+    import healthcheck
+
+    all_entries = _collect_all_entries()
+    site_ids = [e["site_id"] for e in all_entries]
+
+    db = JobDatabase(DB_PATH)
+    report = healthcheck.analyze(db, site_ids)
+    print(healthcheck.format_text(report, show_ok=True))
 
 
 def cmd_stats():
@@ -398,6 +432,7 @@ def main():
 
     subparsers.add_parser("crawl", help="등록된 사이트 크롤링")
     subparsers.add_parser("stats", help="DB 통계")
+    subparsers.add_parser("health", help="등록 사이트 건강 상태 점검 (에러/0건/급감/스테일)")
 
     args = parser.parse_args()
 
@@ -409,6 +444,8 @@ def main():
         cmd_crawl()
     elif args.command == "stats":
         cmd_stats()
+    elif args.command == "health":
+        cmd_health()
 
 
 if __name__ == "__main__":
