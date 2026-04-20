@@ -278,6 +278,8 @@ crawlers/
 | `strategies/playwright_discovery.py` LLM 명시 거부 존중 | ✓ 완료 (Phase 2.5) | 환각 방어 — 규칙점수 폴백 금지 |
 | `strategies/llm.py` excerpt 개선 | ✓ 완료 (Phase 2.6) | script 제거 + 속성 절단 + dense-window |
 | `strategies/heuristic.py` SPA 시그니처 엄격화 | ✓ 완료 (Phase 2.6) | 문자열 매칭 → 할당/id 속성 매칭 |
+| `retry_dom_selectors` validator-피드백 retry | ✓ 완료 (Phase 2.7) | cmd_add 에서 DOM 검증 실패 시 LLM 재시도 (최대 2회) |
+| `extract_site_id` 서브도메인 접두어 스킵 | ✓ 완료 (Phase 2.7) | job/api/recruit 등 의미 없는 prefix 자동 스킵 |
 | `strategies/` → `extractors/` 디렉토리 개명 | 미완 | 이름 충돌 없고 영향 크지 않아 후순위 |
 | `api_crawler.py` | ✓ 완료 (Phase 3) | camhr 일반화 — GET/POST + item_path + detail 지원 |
 | `validate_api_config` | ✓ 완료 (Phase 3) | stub → 실제 API 호출 + 배열 검증 |
@@ -388,6 +390,42 @@ hanin 과 동일 경로, 8건 수집.
 - 실측: JobKorea `/recruit/joblist` → `tr.devloopArea` + `td.tplTit a.link` 등
   정확한 selectors 생성. confidence 0.9.
 
+### Phase 2.7: Validator-피드백 retry 루프 + site_id 보강 — ✓ 완료
+
+**배경**: 한국 주요 구인 사이트 8개 (원티드/캐치/사람인/인크루트/알바천국/알바몬/잡플래닛/고용24)
+실측 후 failure mode 분류:
+- **Mode A (LLM 셀렉터 환각)**: 3건 — 사람인, 인크루트, 고용24
+- **Mode B (CSR 빈 껍데기)**: 1건 — 알바천국
+- **Mode D (HTTP 404/403)**: 3건 — 캐치, 알바몬, 잡플래닛
+- 성공: 1건 — 원티드 (api_discovered)
+
+Mode A 가 37.5% 를 차지해 "validator 가 reject 한 dom config 를 LLM 에 피드백 주고 재시도"
+가 의미 있다고 판단, Phase 2.7 구축.
+
+**구현**:
+- `crawlers/analyzer/strategies/llm.py::retry_dom_selectors(html, failed_selectors, failure_reason, …)`
+  LLM 에 "이전 selectors + validator 실패 사유 + HTML excerpt" 를 던져 수정 제안받음.
+  이전과 완전 동일한 selectors 반환 시 즉시 포기 (같은 환각 반복 방지).
+- `main.py cmd_add` 의 DOM 경로에서 validator 실패 시 최대 `VALIDATOR_RETRY_MAX=2` 회 retry.
+  성공 시 `validation_report.retry_history` 에 각 attempt 기록 첨부.
+- `sites_registry.extract_site_id` 보강 — 의미 없는 서브도메인 접두어(`job`, `api`, `recruit`,
+  `career`, `shop`, `mobile`, `www` 등) 자동 스킵. `job.incruit.com` → `incruit`.
+
+**실측 결과 (Mode A 3건 재테스트)**:
+- 사람인: retry 1회 — LLM 이 동일 selectors 반환 → 조기 포기 → 실패
+- 인크루트: 초기부터 통과 (60/60 매칭) — retry 미발동, 성공
+- 고용24: retry 1회 — LLM 이 동일 selectors 반환 → 조기 포기 → 실패
+
+**한계와 해석**:
+- 실제 retry 로 구제된 사이트 = **0건**. 인크루트는 초기 성공이라 Phase 2.7 공헌 아님.
+- 사람인·고용24 의 진짜 문제는 "initial HTML 에 공고 DOM 자체가 없음"
+  (XHR/form POST 이후 채워짐) — LLM 이 피드백을 받아도 답 없음. retry 는 환각이 아닌
+  **허공을 가리키는 실수** 에 무력.
+- 그럼에도 retry 는 **안전망** 으로 유지 가치 있음: LLM 비결정성 (같은 입력에 다른 답)
+  대응, 드물게 나올 "selector 미세 오탈자" 구제.
+- **다음 단계**: retry 에 Playwright 렌더된 HTML 을 넘기면 사람인/고용24 같은 케이스도
+  구제 가능 — 별도 Phase 로 분리 (`Phase 2.8` 후보).
+
 ### Phase 3: API 경로 일반화 — ✓ 완료
 - `api_crawler.py` 신설 — GET/POST + item_path + pagination(api_param) + 선택적 detail 조회
   - camhr_crawler 의 고정 로직을 일반화: base URL/헤더/파라미터/경로 전부 config 에서 읽음
@@ -414,6 +452,12 @@ hanin 과 동일 경로, 8건 수집.
 - 캄보디아 구인 사이트 50~100개 발굴
 - `analyze` 배치 스크립트
 - 성공률 / 실패 유형 분류
+
+### Phase 2.8 (후보): Playwright 렌더 HTML 을 retry 에 공급 — 미완
+- Phase 2.7 의 retry 가 "HTML 에 공고 DOM 없음" 케이스 (사람인/고용24) 에 무력
+- `cmd_add` 에서 `VALIDATOR_RETRY_USE_RENDER=True` 이면 2회차 retry 는 Playwright 로
+  렌더한 HTML 을 LLM 에 보냄
+- 비용: 등록 시점 브라우저 1회 → 운영 중은 영향 없음
 
 ### Phase 5 (선택): 인터랙션 캡처 — 미완
 - 검색 버튼 클릭, 무한스크롤 유도 등

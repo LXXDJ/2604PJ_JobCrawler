@@ -172,5 +172,50 @@
         "Accounting Vice Manager"
       ]
     }
+  },
+  {
+    "site_id": "incruit",
+    "url": "https://job.incruit.com/jobdb_list/searchjob.asp",
+    "site_type": "static_html",
+    "added_at": "2026-04-20T07:01:10.346489+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://job.incruit.com/jobdb_list/searchjob.asp",
+      "list_params": {},
+      "base_url": "https://job.incruit.com",
+      "selectors": {
+        "list_rows": "ul.c_row",
+        "subject_link": "div.cell_mid > div.cl_top > a",
+        "author": "div.cell_first > div.cl_top > a.cpname",
+        "date": "div.cell_last > div.cl_btm > span:first-child",
+        "hit": "unknown",
+        "content": "unknown"
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 60,
+      "fields_matched": {
+        "title": 60,
+        "author": 60,
+        "date": 60,
+        "hit": 0
+      },
+      "sample_titles": [
+        "(송내)G마켓 고객센터 주문/결제 인바운드 상담",
+        "(유)동양건업 건설회사 도로포장팀 2026년 2차 신입사원 모집",
+        "[(사)대구광역시남구자원봉사센터] 기간제근로자(육아휴직대체인력) 채용 공고"
+      ]
+    }
   }
 ]

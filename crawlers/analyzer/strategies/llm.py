@@ -372,3 +372,112 @@ class LLMStrategy(AnalysisStrategy):
             except json.JSONDecodeError:
                 return None
         return None
+
+
+# ============================================================
+# Phase 2.7: validator 실패 피드백 기반 selectors 재제안
+# ============================================================
+
+RETRY_SYSTEM_PROMPT = """너는 이전에 제안한 CSS selectors 가 실제 HTML DOM 에서 매칭되지 않았다는 피드백을 받은 분석기야.
+실패 사유와 HTML 을 다시 보고 selectors 를 수정해서 JSON 으로만 반환해.
+
+중요 규칙:
+- list_rows 는 '공고/게시글 하나당 하나씩 반복되는 컨테이너' CSS 셀렉터여야 해. 메뉴/필터/페이지네이션이 아님.
+- subject_link 는 list_rows 컨테이너 **내부**에 있는 제목 링크 (<a> 또는 그 자손).
+- HTML 에 실제로 존재하는 클래스/태그 조합만 사용 — 상상 금지. excerpt 안에서 찾을 수 있어야 해.
+- 이전 실패 원인이 'list_rows 매칭 0개' 면 → 현재 selector 는 DOM 에 없음. 다른 클래스/구조를 찾아.
+- 이전 실패 원인이 '제목 추출 비율 낮음' 이면 → list_rows 는 맞는데 subject_link 가 틀렸거나 너무 광범위함.
+- 이전 실패 원인이 '헤더 필터 후 행 부족' 이면 → list_rows 가 너무 좁거나 전부 헤더 클래스가 있음.
+
+반환 JSON (마크다운 펜스 없이):
+{
+  "list_rows": "...",
+  "subject_link": "...",
+  "author": "",
+  "date": "",
+  "hit": "",
+  "content": "",
+  "reasoning": "왜 이 selectors 로 바꿨는지 한 줄"
+}
+
+author/date/hit/content 는 확실한 경우만 채우고, 모르면 빈 문자열로 둬.
+"""
+
+
+def retry_dom_selectors(
+    html: str,
+    failed_selectors: dict,
+    failure_reason: str,
+    api_key: str,
+    model: str = "gpt-4o-mini",
+    timeout: int = 60,
+    max_tokens: int = 512,
+) -> tuple[Optional[dict], str]:
+    """
+    validator 가 거부한 DOM selectors 를 LLM 에 피드백과 함께 다시 제안받기.
+
+    Args:
+        html: validator 가 봤던 HTML (selectors 가 매칭될 대상)
+        failed_selectors: 이전에 제안돼 실패한 selectors dict
+        failure_reason: ValidationReport.reason 문자열
+
+    Returns:
+        (새 selectors dict, reasoning) 또는 (None, 실패 사유).
+        selectors 는 최소한 list_rows / subject_link 가 non-empty 여야 반환.
+    """
+    if not api_key:
+        return None, "api_key 없음"
+
+    excerpt = _build_llm_excerpt(html, MAX_HTML_CHARS)
+
+    user_message = (
+        f"[이전 selectors]\n{json.dumps(failed_selectors, ensure_ascii=False, indent=2)}\n\n"
+        f"[validator 실패 사유]\n{failure_reason}\n\n"
+        f"[HTML 요약 ({len(excerpt)}자)]\n{excerpt}"
+    )
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key, timeout=timeout)
+        response = client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": RETRY_SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+        )
+        raw = response.choices[0].message.content or ""
+    except Exception as e:
+        return None, f"LLM 호출 실패: {type(e).__name__}: {e}"
+
+    try:
+        parsed = json.loads(raw.strip())
+    except json.JSONDecodeError as e:
+        return None, f"JSON 파싱 실패: {e} — raw: {raw[:200]!r}"
+
+    # 최소 필수 필드 확인
+    list_rows = parsed.get("list_rows") or ""
+    subject_link = parsed.get("subject_link") or ""
+    if not list_rows or not subject_link:
+        return None, f"LLM 이 list_rows/subject_link 비워서 반환: {parsed!r}"
+
+    # 이전과 완전히 같은 selectors 면 retry 무의미 — 실패 처리
+    if (
+        list_rows == failed_selectors.get("list_rows")
+        and subject_link == failed_selectors.get("subject_link")
+    ):
+        return None, "LLM 이 이전과 동일한 selectors 반복"
+
+    selectors = {
+        "list_rows": list_rows,
+        "subject_link": subject_link,
+        "author": parsed.get("author") or "",
+        "date": parsed.get("date") or "",
+        "hit": parsed.get("hit") or "",
+        "content": parsed.get("content") or "",
+    }
+    reasoning = str(parsed.get("reasoning", ""))[:300]
+    return selectors, reasoning

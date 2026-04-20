@@ -93,6 +93,13 @@ USE_LLM_API_RANKER = True
 # 이 값보다 낮으면 유효하지 않다고 판단 (다음 전략 시도 or 실패)
 MIN_CONFIDENCE = 0.5
 
+# -- Validator retry 루프 (Phase 2.7) --
+# cmd_add 에서 validate_dom_config 가 거부한 경우, 실패 사유를 LLM 에 돌려보내
+# selectors 를 고쳐 받는 횟수. 0 이면 retry 안 함 (기존 동작).
+# 1~2 가 실용적 — 3회 이상은 보통 LLM 이 같은 답을 반복.
+# retry 는 DOM 경로만 대상 (embedded_json / api 는 실패 원인이 다양해 범위 밖).
+VALIDATOR_RETRY_MAX = 2
+
 # -- HTTP 요청 설정 (분석기 및 크롤러 공통) --
 HTTP_TIMEOUT = 30            # 1회 요청 타임아웃(초)
 HTTP_MAX_RETRIES = 3         # 실패 시 재시도 횟수
@@ -355,13 +362,77 @@ def cmd_add(url: str):
     if report.fields_matched:
         print(f"               매칭: {report.fields_matched}")
 
+    retry_history: list = []  # Phase 2.7: retry 시도 기록 → validation_report 에 첨부
+
+    # --- Phase 2.7: DOM validator 실패 시 LLM retry 루프 ---
+    if (
+        not report.ok
+        and method == "dom"
+        and VALIDATOR_RETRY_MAX > 0
+        and LLM_API_KEY
+    ):
+        from analyzer.strategies.llm import retry_dom_selectors
+
+        for attempt in range(1, VALIDATOR_RETRY_MAX + 1):
+            prev_selectors = dict(new_config.get("source", {}).get("selectors") or {})
+            print(f"\n  [retry {attempt}/{VALIDATOR_RETRY_MAX}] LLM 에 selectors 수정 요청...")
+            print(f"    실패 사유 : {report.reason}")
+
+            fixed, reasoning = retry_dom_selectors(
+                html=html,
+                failed_selectors=prev_selectors,
+                failure_reason=report.reason,
+                api_key=LLM_API_KEY,
+                model=LLM_MODEL,
+            )
+            if fixed is None:
+                print(f"    [retry {attempt}] 포기: {reasoning}")
+                retry_history.append({
+                    "attempt": attempt,
+                    "input_reason": report.reason,
+                    "outcome": "llm_gave_up",
+                    "detail": reasoning,
+                })
+                break
+
+            print(f"    제안 selectors: {fixed}")
+            if reasoning:
+                print(f"    이유: {reasoning}")
+
+            # config 에 반영 — result.config 도 함께 (build_entry 시 재변환되므로)
+            new_config["source"]["selectors"] = fixed
+            result.config["selectors"] = fixed
+
+            report = validate_dom_config(html, new_config)
+            retry_history.append({
+                "attempt": attempt,
+                "input_reason": retry_history[-1]["input_reason"] if retry_history else "(첫 시도 실패 사유)",
+                "proposed_selectors": fixed,
+                "llm_reasoning": reasoning,
+                "outcome": "ok" if report.ok else "fail",
+                "new_reason": report.reason if not report.ok else "",
+            })
+
+            print(f"    [retry {attempt}] validator: ok={report.ok}")
+            if report.sample_titles:
+                print(f"                    샘플 제목: {report.sample_titles}")
+            if report.fields_matched:
+                print(f"                    매칭: {report.fields_matched}")
+            if report.ok:
+                break
+
     if not report.ok:
         print(f"\n[거부] validator 실패: {report.reason}")
+        if retry_history:
+            print(f"  → retry {len(retry_history)}회 시도 후에도 실패.")
         print("  → sites.json에 저장하지 않음. selectors 재확인 필요.")
         return
 
     # --- 저장 (validated=true 로 마킹) ---
-    entries.append(sites_registry.build_entry(result, site_id, validation_report=report.to_dict()))
+    report_dict = report.to_dict()
+    if retry_history:
+        report_dict["retry_history"] = retry_history
+    entries.append(sites_registry.build_entry(result, site_id, validation_report=report_dict))
     sites_registry.save_all(SITES_JSON_PATH, entries)
 
     print(f"\n[OK] 등록 완료: {SITES_JSON_PATH}")

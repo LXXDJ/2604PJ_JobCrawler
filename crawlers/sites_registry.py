@@ -80,16 +80,37 @@ def save_all(path: str, entries: list) -> None:
 # site_id 자동 생성
 # ============================================================
 
+# 의미 없는 서브도메인 접두어 — host 의 맨 앞에 있으면 스킵하고 그 다음 토큰을 site_id 로.
+# job.incruit.com → "job" 이 아닌 "incruit" 가 되어야 함. "www" 만 벗기던 기존 로직의 보강.
+# 공격적으로 넓히면 정상 사이트가 엉뚱한 id 로 저장될 수 있으므로, 흔히 쓰이는 prefix 만.
+_SUBDOMAIN_SKIP_PREFIXES = {
+    "www", "www2", "ww",
+    "api", "job", "jobs", "recruit", "recruits", "career", "careers",
+    "shop", "m", "mobile",
+    "en", "ko", "ja", "zh", "fr",
+    "admin", "my", "user", "auth",
+    "cdn", "static", "media", "img", "assets",
+    "mail", "smtp", "blog",
+}
+
+
 def extract_site_id(url: str) -> str:
     """
     URL 에서 site_id 자동 추출.
-      siemreap.korean.net  → siemreap
-      www.hanin.or.kr      → hanin
+      siemreap.korean.net   → siemreap     (맨 앞 토큰이 skip 목록 밖 — 그대로)
+      www.hanin.or.kr       → hanin        (www 스킵)
+      job.incruit.com       → incruit      (job 스킵)
+      api.camhr.com         → camhr        (api 스킵)
+      www.jobkorea.co.kr    → jobkorea     (www 스킵)
     """
-    host = urlparse(url).netloc
-    if host.startswith("www."):
-        host = host[4:]
-    return host.split(".")[0] or "site"
+    host = urlparse(url).netloc.split(":")[0]  # port 제거
+    parts = host.split(".")
+    # 의미 없는 접두어가 맨 앞에 연속되면 전부 스킵
+    while parts and parts[0].lower() in _SUBDOMAIN_SKIP_PREFIXES:
+        parts = parts[1:]
+    if not parts:
+        return "site"
+    return parts[0].lower() or "site"
 
 
 def resolve_unique_site_id(desired: str, taken: set) -> str:
