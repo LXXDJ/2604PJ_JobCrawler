@@ -19,7 +19,7 @@ gnuboard_crawler 의 로직을 일반화 + 확장한 것.
 
 import time
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -37,7 +37,9 @@ def _parse_list_page(html: str, config: dict) -> list:
     selectors = source["selectors"]
     parse_mode = source.get("parse_mode", "direct")
     skip_classes = set(source.get("skip_row_if_has_class") or [])
-    base_url = source.get("base_url", "")
+    # 상세 링크 resolve 의 기준. list_url 이 있으면 그걸 기준으로 urljoin 해야
+    # path-relative 링크 (view.php?... 같은 leading slash 없는 형태) 도 처리 가능.
+    link_base = source.get("list_url") or source.get("base_url", "")
 
     soup = BeautifulSoup(html, "lxml")
     rows = soup.select(selectors["list_rows"])
@@ -63,8 +65,14 @@ def _parse_list_page(html: str, config: dict) -> list:
 
         title = subject_tag.get_text(strip=True)
         link = subject_tag.get("href", "")
-        if link.startswith("/") and base_url:
-            link = base_url + link
+        # subject_link 이 h1/span 같은 anchor 내부 원소를 가리키는 경우 (radiokorea 등),
+        # href 는 조상 <a> 에 있으므로 위로 올라가 찾는다.
+        if not link:
+            anchor = subject_tag.find_parent("a")
+            if anchor:
+                link = anchor.get("href", "")
+        if link and link_base and not urlparse(link).scheme:
+            link = urljoin(link_base, link)
 
         # 저자
         author = ""
