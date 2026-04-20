@@ -314,18 +314,8 @@ def cmd_add(url: str):
     from analyzer.validator import (
         validate_dom_config,
         validate_embedded_json_config,
+        validate_api_config,
     )
-
-    try:
-        html = fetch(
-            url,
-            timeout=HTTP_TIMEOUT,
-            max_retries=HTTP_MAX_RETRIES,
-            retry_backoff=HTTP_RETRY_BACKOFF,
-        )
-    except Exception as e:
-        print(f"\n[거부] 검증용 HTML 재다운로드 실패: {type(e).__name__}: {e}")
-        return
 
     try:
         new_config = sites_registry.analysis_to_new_schema_config(result, url)
@@ -334,14 +324,31 @@ def cmd_add(url: str):
         return
 
     method = new_config["extraction_method"]
-    if method == "dom":
-        report = validate_dom_config(html, new_config)
-    elif method == "embedded_json":
-        # 렌더 경로는 url 필요 (html 은 무시됨)
-        report = validate_embedded_json_config(html, new_config, url=url)
+
+    if method == "api":
+        # API 경로는 HTML 불필요 — 엔드포인트 직접 호출
+        report = validate_api_config(new_config)
     else:
-        print(f"\n[거부] extraction_method={method!r} 에 대한 validator 없음")
-        return
+        # dom / embedded_json 은 HTML 필요
+        try:
+            html = fetch(
+                url,
+                timeout=HTTP_TIMEOUT,
+                max_retries=HTTP_MAX_RETRIES,
+                retry_backoff=HTTP_RETRY_BACKOFF,
+            )
+        except Exception as e:
+            print(f"\n[거부] 검증용 HTML 재다운로드 실패: {type(e).__name__}: {e}")
+            return
+
+        if method == "dom":
+            report = validate_dom_config(html, new_config)
+        elif method == "embedded_json":
+            # 렌더 경로는 url 필요 (html 은 무시됨)
+            report = validate_embedded_json_config(html, new_config, url=url)
+        else:
+            print(f"\n[거부] extraction_method={method!r} 에 대한 validator 없음")
+            return
     print(f"\n  validator  : ok={report.ok}")
     if report.sample_titles:
         print(f"               샘플 제목: {report.sample_titles}")

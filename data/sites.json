@@ -127,5 +127,50 @@
         "[로에일/니브] 한남동 쇼룸 세일즈 스테프 모집(여성의류 브랜드)"
       ]
     }
+  },
+  {
+    "site_id": "camhr",
+    "url": "https://www.camhr.com/",
+    "site_type": "api_discovered",
+    "added_at": "2026-04-20T06:22:39.170625+00:00",
+    "extraction_method": "api",
+    "requires_render": false,
+    "source": {
+      "api_endpoint": "https://api.camhr.com/v1.0.0/jobs/simple/page-query",
+      "method": "GET",
+      "base_url": "https://www.camhr.com",
+      "request_headers": {
+        "referer": "https://www.camhr.com/",
+        "accept": "application/json"
+      },
+      "list_params": {
+        "size": 50
+      },
+      "item_path": "data.result",
+      "total_path": "data.totalPage",
+      "link_template": "https://www.camhr.com/a/job/{id}",
+      "detail_endpoint_template": "https://api.camhr.com/v1.0.0/jobs/{id}",
+      "detail_content_path": "description"
+    },
+    "pagination": {
+      "type": "api_param",
+      "param": "page",
+      "start": 1,
+      "max_pages": 3
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "수동 조정 — Playwright 가 캡처한 urgent=true 필터 제거, size=50 으로 확장, total_path/link_template/detail_endpoint_template 수작업 추가 (auto-discovery 후 polish 단계)",
+      "items_extracted": 12,
+      "fields_matched": {
+        "title": 12
+      },
+      "sample_titles": [
+        "Professional Sales (Showroom)",
+        "Business Operations Manager (Retial)",
+        "Accounting Vice Manager"
+      ]
+    }
   }
 ]

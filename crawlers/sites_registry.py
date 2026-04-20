@@ -39,8 +39,12 @@ from urllib.parse import parse_qsl, urlparse, urlunparse
 EXTRACTION_METHOD_TO_CRAWLER = {
     "dom": "dom_crawler",
     "embedded_json": "embedded_crawler",  # Phase 2
-    # "api":           "api_crawler",     # Phase 3
+    "api": "api_crawler",                 # Phase 3
 }
+
+
+# API 응답에서 "페이지 번호 파라미터" 후보 — list_params 에서 발견되면 그걸 pagination.param 으로.
+API_PAGE_PARAM_CANDIDATES = ["page", "pageNo", "pageNum", "pageNumber", "p"]
 
 
 # SiteType → ExtractionMethod 추론.
@@ -205,6 +209,58 @@ def _embedded_json_analysis_to_source(result, url: str) -> dict:
     return source
 
 
+def _api_analysis_to_source(result, url: str) -> dict:
+    """api_discovered 분석 결과 → source 블록.
+
+    PlaywrightDiscoveryStrategy 가 내는 config:
+        {platform, base_url, api_endpoint, method, request_headers,
+         response_shape, response_sample, selection_source, llm_reason,
+         all_candidates, needs_manual_adapter}
+
+    이 중 크롤러가 쓸 것만 추려 source 로 재구성한다.
+    api_endpoint 의 쿼리스트링은 list_params 로 분리하고,
+    페이지 파라미터 후보가 섞여있으면 제거 (pagination.param 쪽으로 이동).
+    """
+    c = result.config
+    endpoint = c.get("api_endpoint", "")
+    parsed_ep = urlparse(endpoint)
+
+    # 쿼리스트링 → list_params
+    raw_params = dict(parse_qsl(parsed_ep.query, keep_blank_values=True))
+
+    # 페이지 파라미터 추출 + list_params 에서 제거
+    page_param = None
+    for cand in API_PAGE_PARAM_CANDIDATES:
+        if cand in raw_params:
+            page_param = cand
+            raw_params.pop(cand)
+            break
+
+    # api_endpoint 는 쿼리 제거된 순수 URL 로 저장
+    endpoint_clean = urlunparse(parsed_ep._replace(query=""))
+
+    # item_path 추론 — response_shape 기반
+    shape = c.get("response_shape") or {}
+    if shape.get("nested_array_path"):
+        item_path = shape["nested_array_path"]
+    elif shape.get("array_field"):
+        item_path = shape["array_field"]
+    elif shape.get("type") == "array":
+        item_path = ""  # 루트 자체가 배열
+    else:
+        item_path = ""
+
+    source = {
+        "api_endpoint": endpoint_clean,
+        "method": c.get("method", "GET"),
+        "base_url": c.get("base_url", ""),
+        "request_headers": c.get("request_headers") or {},
+        "list_params": raw_params,
+        "item_path": item_path,
+    }
+    return source, page_param
+
+
 def _static_html_analysis_to_source(result, url: str) -> dict:
     """static_html 분석 결과 → source 블록.
 
@@ -254,6 +310,8 @@ def analysis_to_new_schema_config(result, url: str) -> dict:
             f"(site_type={site_type})"
         )
 
+    api_page_param = None  # api 분기에서만 쓰임 — pagination 조립 전 보관
+
     if method == "dom":
         if site_type == "gnuboard":
             source = _gnuboard_analysis_to_source(result, url)
@@ -266,6 +324,8 @@ def analysis_to_new_schema_config(result, url: str) -> dict:
             )
     elif method == "embedded_json":
         source = _embedded_json_analysis_to_source(result, url)
+    elif method == "api":
+        source, api_page_param = _api_analysis_to_source(result, url)
     else:
         # 매핑에 있는데 변환 분기 안 탄 경우 — 방어
         raise ValueError(
@@ -274,11 +334,20 @@ def analysis_to_new_schema_config(result, url: str) -> dict:
 
     requires_render = bool(result.config.get("requires_render"))
 
+    if method == "api":
+        pagination = {
+            "type": "api_param",
+            "param": api_page_param or "page",
+            "start": 1,
+        }
+    else:
+        pagination = {"type": "url_param", "param": "page", "start": 1}
+
     return {
         "extraction_method": method,
         "requires_render": requires_render,
         "source": source,
-        "pagination": {"type": "url_param", "param": "page", "start": 1},
+        "pagination": pagination,
     }
 
 
@@ -304,16 +373,8 @@ def can_register(analysis_result) -> tuple[bool, str]:
     config = analysis_result.config
     site_type = analysis_result.site_type.value
 
-    # 2. API 자동 발견됐지만 Phase 3 까지 api_crawler 미구현
-    if site_type == "api_discovered":
-        endpoint = config.get("api_endpoint", "?")
-        return False, (
-            f"API 엔드포인트 자동 발견: {endpoint}\n"
-            f"      → extraction_method='api' 크롤러는 Phase 3 에서 구현 예정.\n"
-            f"      → 당분간 crawlers/hardcoded_crawls.py 에 수동 어댑터 추가 필요."
-        )
-
-    # 3. SPA 감지됐는데 Playwright 도 실패
+    # 2. SPA 감지됐는데 Playwright 도 실패 (needs_playwright_discovery 만 있고
+    #    실제 api_endpoint 는 비어있는 케이스)
     if config.get("needs_playwright_discovery"):
         return False, "SPA 사이트 — Playwright 자동 발견이 후보 API 를 찾지 못함"
 
@@ -345,6 +406,21 @@ def can_register(analysis_result) -> tuple[bool, str]:
                 return False, "script_selector 비어있음 (필수)"
         if not config.get("item_path"):
             return False, "item_path 비어있음 — embedded state 안 배열 경로를 찾지 못했음"
+    elif method == "api":
+        if not config.get("api_endpoint"):
+            return False, "api_endpoint 비어있음 (Playwright 가 후보 API 를 못 찾음)"
+        # item_path 는 response_shape 에서 추론 — shape 에 배열이 있어야 변환 가능
+        shape = config.get("response_shape") or {}
+        has_array = (
+            shape.get("nested_array_path")
+            or shape.get("array_field")
+            or shape.get("type") == "array"
+        )
+        if not has_array:
+            return False, (
+                "response_shape 에 배열 경로 없음 — 선택된 API 응답이 "
+                "단일 객체/스칼라. 공고 리스트 API 아닐 가능성."
+            )
 
     return True, ""
 

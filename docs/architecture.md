@@ -68,7 +68,11 @@
     //   {"list_url", "list_params", "base_url", "state_source", "item_path",
     //    "wait_for_ms"}   // state_source 예: "window.__NUXT__", "window.__NEXT_DATA__"
     //
-    // api:  (Phase 3 미구현)
+    // api:  (Phase 3)
+    //   {"api_endpoint", "method" (GET|POST), "base_url", "request_headers",
+    //    "list_params", "item_path", "total_path" (선택),
+    //    "link_template" (선택), "detail_endpoint_template" (선택),
+    //    "detail_method" (선택, 기본 GET), "detail_content_path" (선택)}
   },
 
   "pagination": {
@@ -144,11 +148,15 @@ URL
 for entry in REGISTERED_CRAWLS + sites.json:
     dispatcher.dispatch(entry)
       ├─ extraction_method == "dom"           → dom_crawler.crawl(...)
-      ├─ extraction_method == "api"           → NotImplementedError (Phase 3)
+      ├─ extraction_method == "api"           → api_crawler.crawl(...)
+      │     ├─ GET/POST 으로 api_endpoint 호출 + item_path 로 배열 도달
+      │     ├─ total_path 있으면 총 페이지 수 자동 인식
+      │     ├─ link_template / detail_endpoint_template 있으면 상세 본문도 수집
+      │     └─ 신규만 detail 호출 (재확인 시 부하 최소화)
       ├─ extraction_method == "embedded_json" → embedded_crawler.crawl(...)
       │     ├─ requires_render=False → requests fetch + <script> 파싱
       │     └─ requires_render=True  → 페이지별 Playwright 렌더 + page.evaluate
-      └─ 레거시 crawler="camhr_crawler" / "gnuboard_crawler" → 해당 모듈
+      └─ 레거시 crawler="gnuboard_crawler" → gnuboard_crawler (구 스키마 백업용)
     ↓
     각 크롤러:
       - Paginator: pagination.type (url_param 만 현재 지원)
@@ -184,9 +192,9 @@ crawlers/
 ├── dispatcher.py                # extraction_method 로 크롤러 모듈 선택
 ├── dom_crawler.py               # gnuboard/static_html 통합 DOM 크롤러
 ├── embedded_crawler.py          # embedded_json 크롤러 (HTML + 렌더 경로)
-├── camhr_crawler.py             # 레거시 (Phase 3 에서 api_crawler 로 이주 예정)
+├── api_crawler.py               # API 기반 크롤러 (Phase 3 — camhr 이주 완료)
 ├── gnuboard_crawler.py          # 레거시 (dom_crawler 완성 후 삭제 예정)
-├── hardcoded_crawls.py          # REGISTERED_CRAWLS — analyzer 로 자동화 불가 사이트용
+├── hardcoded_crawls.py          # REGISTERED_CRAWLS — 현재 비어있음 (camhr 이주 후)
 ├── sites_registry.py            # sites.json I/O + analysis → config 변환 + can_register
 ├── database.py                  # JobDatabase
 ├── http_client.py               # requests + 재시도
@@ -197,11 +205,11 @@ crawlers/
 ### 5.2 목표 구조 (리팩터 완료 시)
 
 - `analyzer/strategies/` → `analyzer/extractors/` 로 개명 (역할이 classifier vs extractor 로 분화되면)
-- `crawler/` 서브디렉토리로 크롤러들 이동 + `api_crawler.py` 신규
+- `crawler/` 서브디렉토리로 크롤러들 이동
 - `pagination.py` + `field_mapping.py` 모듈로 로직 분리
-- `hardcoded_crawls.py` 삭제 — 모든 사이트가 sites.json 로 이주
+- `hardcoded_crawls.py` 삭제 — 현재 비어있으므로 파일 자체 제거 가능
 
-**현재 도달도**: analyzer 분리 ✓, validator 분리 ✓, dom/embedded 크롤러 ✓. 남은 건 api_crawler + 레거시 이주 + 구조적 분리.
+**현재 도달도**: analyzer 분리 ✓, validator 분리 ✓, dom/embedded/api 크롤러 ✓, camhr 이주 ✓. 남은 건 구조적 분리 + gnuboard_crawler 레거시 제거.
 
 ---
 
@@ -218,12 +226,19 @@ crawlers/
 
 리포트 내용: items_extracted, fields_matched (%), sample_titles (최대 3개)
 
-### 6.2 API config 검증 (`validate_api_config(config)`)
+### 6.2 API config 검증 (`validate_api_config(config)`) — Phase 3 실구현
 
 통과 조건:
-1. 실제 endpoint 호출 → HTTP 200 + JSON 파싱 성공
-2. `source.item_path` (JSONPath) 로 꺼낸 값이 배열이고 길이 ≥ **2**
-3. 배열 첫 아이템이 텍스트성 필드를 ≥ **1개** 가짐 (title/company/name 등 공고 필드 후보)
+1. `source.api_endpoint` 에 GET/POST 호출 → HTTP 200 + JSON 파싱 성공
+2. `source.item_path` (dot-notation) 으로 꺼낸 값이 배열이고 길이 ≥ **2**
+3. 배열 아이템의 ≥ **50%** 가 제목성 필드 (`title`/`jobTitle`/`postSubject`/...)를
+   가짐 + 추출된 제목이 UI 노이즈만은 아님
+
+구현 세부:
+- 캡처 헤더 중 `:authority` 같은 HTTP/2 의사헤더와 `cookie`/`host`/`content-length`
+  는 자동 제거 (requests 가 재전송하면 방해됨).
+- GET 은 `list_params` → 쿼리스트링. POST 는 `list_params` → JSON body.
+- 실패 사유는 ValidationReport.reason 에 기록 → sites.json 에 그대로 박힘.
 
 ### 6.3 Embedded JSON config 검증 (`validate_embedded_json_config(html, config, url)`)
 
@@ -264,9 +279,10 @@ crawlers/
 | `strategies/llm.py` excerpt 개선 | ✓ 완료 (Phase 2.6) | script 제거 + 속성 절단 + dense-window |
 | `strategies/heuristic.py` SPA 시그니처 엄격화 | ✓ 완료 (Phase 2.6) | 문자열 매칭 → 할당/id 속성 매칭 |
 | `strategies/` → `extractors/` 디렉토리 개명 | 미완 | 이름 충돌 없고 영향 크지 않아 후순위 |
-| `api_crawler.py` | 미완 (Phase 3) | camhr 일반화 대상 |
-| `camhr_crawler.py` → sites.json 이주 | 미완 (Phase 3) | |
-| `hardcoded_crawls.py` 삭제 | 미완 (Phase 3 이후) | 전체 이주 전까진 유지 |
+| `api_crawler.py` | ✓ 완료 (Phase 3) | camhr 일반화 — GET/POST + item_path + detail 지원 |
+| `validate_api_config` | ✓ 완료 (Phase 3) | stub → 실제 API 호출 + 배열 검증 |
+| `camhr_crawler.py` → sites.json 이주 | ✓ 완료 (Phase 3) | 모듈 삭제, REGISTERED_CRAWLS 에서 camhr 제거 |
+| `hardcoded_crawls.py` 비움 | ✓ 완료 (Phase 3) | 파일은 유지 (향후 특수 케이스 대비) |
 | `field_mapping` JSONPath 표현식 | 미완 | 현재는 크롤러 내장 휴리스틱 키 리스트로 대체 |
 
 ---
@@ -283,12 +299,23 @@ crawlers/
 ### siemreap (gnuboard, 캄보디아 게시판) — ✓ 정상 수집
 hanin 과 동일 경로, 8건 수집.
 
-### CamHR (API, 현재 하드코딩) — ⏳ Phase 3
-현재는 `hardcoded_crawls.py` 의 레거시 어댑터로 수집 중. Phase 3 에서:
-1. Heuristic → spa_custom
-2. PlaywrightDiscoveryStrategy → LLM 랭커가 `jobs/simple/page-query` 선택
-3. Validator (`validate_api_config`) → `data.result` 배열 확인
-4. Crawler: 신규 `api_crawler`
+### CamHR (API) — ✓ Phase 3 이주 완료
+1. Heuristic → spa_nuxt (`/_nuxt/` + `data-n-head`)
+2. PlaywrightDiscoveryStrategy → 11개 JSON XHR 캡처, LLM 랭커가
+   `https://api.camhr.com/v1.0.0/jobs/simple/page-query` 선택
+3. `sites_registry._api_analysis_to_source` 가 URL 쿼리를 list_params 로 쪼개고
+   페이지 파라미터 (`page`) 를 pagination 쪽으로 분리. `response_shape.nested_array_path`
+   에서 item_path = `data.result` 자동 추출.
+4. `validate_api_config` → 엔드포인트 실호출, 12건 `title` 매칭 확인 → 통과.
+5. 등록 후 사이트 운영자가 한 번 polish — Playwright 가 캡처한 `urgent=true&isFirst=true`
+   필터 제거, `size=50` 로 확장, `total_path`/`link_template`/`detail_endpoint_template`
+   수작업 추가. 이 polish 단계는 **자동 발견이 완벽할 수 없다는 한계의 보정**.
+6. Crawler: `api_crawler` — 50건 수집 성공, 제목/회사/지역/본문 모두 채워짐.
+
+**Phase 3 후 구조 변경**:
+- `hardcoded_crawls.py` 에서 camhr 제거 → `REGISTERED_CRAWLS = []` 로 비움
+- `crawlers/camhr_crawler.py` 파일 삭제
+- `dispatcher` 에서 `camhr_crawler` 레거시 분기 제거
 
 ### Wanted (Next.js SSR, 메타만 있음) — ✓ 정직한 실패
 1. Heuristic → spa_next
@@ -361,11 +388,27 @@ hanin 과 동일 경로, 8건 수집.
 - 실측: JobKorea `/recruit/joblist` → `tr.devloopArea` + `td.tplTit a.link` 등
   정확한 selectors 생성. confidence 0.9.
 
-### Phase 3: API 경로 일반화 — 미완
-- `api_crawler.py` 구현 (camhr 일반화)
-- `validate_api_config` 실구현
-- camhr_crawler → sites.json 엔트리로 이주
-- hardcoded_crawls.py 축소/삭제
+### Phase 3: API 경로 일반화 — ✓ 완료
+- `api_crawler.py` 신설 — GET/POST + item_path + pagination(api_param) + 선택적 detail 조회
+  - camhr_crawler 의 고정 로직을 일반화: base URL/헤더/파라미터/경로 전부 config 에서 읽음
+  - `link_template`, `detail_endpoint_template`, `detail_content_path` 로 상세 본문 조립
+  - 필드 휴리스틱 (TITLE/COMPANY/URL/...) 은 embedded_crawler 와 같은 키 후보 목록
+  - dict 값 fallback 키에 `"company"` 포함 → camhr 처럼 `employer: {company: ...}` 중첩 대응
+- `validate_api_config` 실구현 — stub 제거, 실제 API 호출 + item_path 배열 확인 + 제목성 필드 50%
+- `_api_analysis_to_source` 추가 — PlaywrightDiscovery 결과를 sites.json 신 스키마로 변환
+  - api_endpoint 의 쿼리스트링 → list_params 분리
+  - page 파라미터 후보 자동 검출 → pagination.param 으로 이동
+  - response_shape.nested_array_path / array_field → item_path 자동 추출
+- `sites_registry.can_register` 에서 `api_discovered` 거부 제거 → 등록 허용
+- `dispatcher` 에 api 라우팅 추가 + 레거시 `camhr_crawler` 분기 제거
+- camhr 이주 완료: hardcoded_crawls.py 에서 제거, sites.json 에 등록
+- `crawlers/camhr_crawler.py` 파일 삭제
+
+**남은 한계 (운영자가 polish 해야 하는 것)**:
+- Playwright 가 캡처하는 엔드포인트는 "시작 페이지가 그 순간 호출한 것" 이라 필터가 섞일 수 있음
+  (camhr 홈이 `urgent=true` 로 요청했듯). 필요하면 사람이 sites.json 에서 필터 제거.
+- `total_path`, `link_template`, `detail_*` 은 response 구조를 보고 사람이 넣어야 함
+  (auto-discovery 가 상세 API 는 캡처 안 함 — 상세 페이지에서만 호출되기 때문).
 
 ### Phase 4: 대량 발굴 + 실측 — 미완
 - 캄보디아 구인 사이트 50~100개 발굴

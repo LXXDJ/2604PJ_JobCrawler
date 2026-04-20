@@ -18,6 +18,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import requests
 from bs4 import BeautifulSoup
 
 
@@ -193,17 +194,151 @@ def _all_ui_noise(titles: list) -> bool:
 
 
 # ============================================================
-# API config 검증 (Phase 3 에서 구현)
+# API config 검증
 # ============================================================
+
+VALIDATOR_API_TIMEOUT = 15
+VALIDATOR_API_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
 
 def validate_api_config(config: dict) -> ValidationReport:
     """
     API 엔드포인트를 실제로 호출해서 응답이 공고 리스트 형태인지 확인.
-    Phase 3 에서 실제 구현 예정. 지금은 stub — 항상 ok=True (기존 분석기 동작 유지).
+
+    기대하는 config 모양:
+        {
+            "extraction_method": "api",
+            "source": {
+                "api_endpoint": "https://api.example.com/v1/jobs",
+                "method": "GET",
+                "request_headers": {"Referer": "...", ...},   # 선택
+                "list_params": {"page": 1, "size": 50},       # 선택
+                "item_path": "data.result",
+            }
+        }
+
+    통과 조건:
+        1. 실제 호출 → HTTP 200 + JSON 파싱 성공
+        2. item_path 로 도달한 값이 list 이고 길이 >= MIN_LIST_ROWS
+        3. 아이템 중 제목성 필드를 가진 비율 >= MIN_TITLE_MATCH_RATIO
     """
+    source = config.get("source") or {}
+    api_endpoint = source.get("api_endpoint")
+    method = (source.get("method") or "GET").upper()
+    item_path = source.get("item_path", "")
+    list_params = source.get("list_params") or {}
+    headers = {"User-Agent": VALIDATOR_API_USER_AGENT, "Accept": "application/json"}
+    extra_headers = source.get("request_headers") or {}
+    for k, v in extra_headers.items():
+        # playwright 캡처 헤더에는 :authority 같은 HTTP/2 의사헤더 / cookie 가 섞임 — 제외
+        if k.startswith(":") or k.lower() in ("cookie", "host", "content-length"):
+            continue
+        headers[k] = v
+
+    if not api_endpoint:
+        return ValidationReport(ok=False, reason="source.api_endpoint 비어있음")
+    if not item_path:
+        return ValidationReport(ok=False, reason="source.item_path 비어있음")
+
+    try:
+        if method == "GET":
+            response = requests.get(
+                api_endpoint,
+                params=list_params,
+                headers=headers,
+                timeout=VALIDATOR_API_TIMEOUT,
+            )
+        elif method == "POST":
+            response = requests.post(
+                api_endpoint,
+                json=list_params,
+                headers=headers,
+                timeout=VALIDATOR_API_TIMEOUT,
+            )
+        else:
+            return ValidationReport(
+                ok=False,
+                reason=f"method={method!r} 미지원 (GET/POST 만 지원)",
+            )
+    except Exception as e:
+        return ValidationReport(
+            ok=False,
+            reason=f"API 호출 실패: {type(e).__name__}: {e}",
+        )
+
+    if response.status_code != 200:
+        return ValidationReport(
+            ok=False,
+            reason=f"HTTP {response.status_code} — endpoint 가 인증/세션/Referer 를 요구할 가능성",
+        )
+
+    try:
+        payload = response.json()
+    except Exception as e:
+        return ValidationReport(
+            ok=False,
+            reason=f"응답 JSON 파싱 실패: {type(e).__name__}: {e}",
+        )
+
+    items = _traverse_path(payload, item_path)
+    if items is None:
+        return ValidationReport(
+            ok=False,
+            reason=f"item_path {item_path!r} 도달 실패 (응답 구조 변경?)",
+        )
+    if not isinstance(items, list):
+        return ValidationReport(
+            ok=False,
+            reason=f"item_path 끝 값이 list 아님 (type={type(items).__name__})",
+        )
+    if len(items) < MIN_LIST_ROWS:
+        return ValidationReport(
+            ok=False,
+            reason=f"배열 길이 {len(items)} < {MIN_LIST_ROWS}",
+            items_extracted=len(items),
+        )
+
+    titles: list = []
+    matched = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        picked = _pick_title(item)
+        if picked and len(picked) >= MIN_TITLE_LEN:
+            titles.append(picked)
+            matched += 1
+
+    fields_matched = {"title": matched}
+    match_ratio = matched / len(items)
+    if match_ratio < MIN_TITLE_MATCH_RATIO:
+        return ValidationReport(
+            ok=False,
+            reason=(
+                f"제목성 필드 추출 비율 {match_ratio:.0%} ({matched}/{len(items)}) "
+                f"< {MIN_TITLE_MATCH_RATIO:.0%} — item_path 가 메타/필터 배열일 가능성"
+            ),
+            items_extracted=len(items),
+            fields_matched=fields_matched,
+            sample_titles=titles[:3],
+        )
+
+    if _all_ui_noise(titles):
+        return ValidationReport(
+            ok=False,
+            reason="추출된 제목이 모두 UI/네비 키워드",
+            items_extracted=len(items),
+            fields_matched=fields_matched,
+            sample_titles=titles[:3],
+        )
+
     return ValidationReport(
         ok=True,
-        reason="validate_api_config: Phase 3 에서 실제 구현 예정 (현재 stub)",
+        items_extracted=len(items),
+        fields_matched=fields_matched,
+        sample_titles=titles[:3],
     )
 
 
