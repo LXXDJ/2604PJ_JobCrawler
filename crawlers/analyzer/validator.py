@@ -8,13 +8,15 @@ analyzer 가 생성한 config 를 sites.json 에 저장하기 전에, 실제로 
 저장을 거부한다. 덕분에 LLM 이 엉뚱한 selectors 를 제안해도 "프로덕션에서
 0건 수집" 같은 침묵 실패를 방지할 수 있다.
 
-Phase 1 범위:
-    - validate_dom_config : 실제 구현
-    - validate_api_config / validate_embedded_json : stub (Phase 2/3)
+Phase 2 범위:
+    - validate_dom_config          : 실제 구현 (Phase 1 부터)
+    - validate_embedded_json_config: 실제 구현 (Phase 2 추가)
+    - validate_api_config          : stub (Phase 3)
 """
 
+import json
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from bs4 import BeautifulSoup
 
@@ -206,15 +208,156 @@ def validate_api_config(config: dict) -> ValidationReport:
 
 
 # ============================================================
-# Embedded JSON config 검증 (Phase 2 에서 구현)
+# Embedded JSON config 검증
 # ============================================================
+
+# 공고 아이템 내에서 "제목성" 필드로 간주할 key 후보.
+# embedded_crawler._pick_field 와 기본 의도는 동일하지만, 여기선 validator 만의
+# 책임 (실제 배열에 제목이 있는가) 을 위해 독립적으로 정의해둔다.
+EMBEDDED_TITLE_KEYS = [
+    "title", "jobTitle", "postSubject", "subject", "name",
+    "jobName", "jobPostingName", "position", "positionName",
+]
+
 
 def validate_embedded_json_config(html: str, config: dict) -> ValidationReport:
     """
-    HTML 내 <script> 에서 state JSON 뽑고 item_path 로 배열 도달 가능한지 확인.
-    Phase 2 에서 실제 구현 예정. 지금은 stub.
+    HTML 내 <script> 에서 state JSON 을 뽑고, item_path 로 배열에 도달해서
+    실제로 공고성 데이터가 있는지 확인한다.
+
+    기대하는 config 모양:
+        {
+            "source": {
+                "script_selector": "script#__NEXT_DATA__",
+                "item_path": "props.pageProps.jobs",
+            }
+        }
+
+    통과 조건:
+        1. script_selector 로 <script> 발견
+        2. 내부 문자열이 유효 JSON 으로 파싱됨
+        3. item_path 로 도달한 값이 list 이고 길이 >= MIN_LIST_ROWS
+        4. 아이템 중 MIN_TITLE_MATCH_RATIO 이상이 제목성 필드를 가짐
     """
+    source = config.get("source") or {}
+    script_selector = source.get("script_selector")
+    item_path = source.get("item_path", "")
+
+    if not script_selector:
+        return ValidationReport(ok=False, reason="source.script_selector 가 비어있음")
+
+    try:
+        soup = BeautifulSoup(html, "lxml")
+    except Exception as e:
+        return ValidationReport(ok=False, reason=f"HTML 파싱 실패: {type(e).__name__}: {e}")
+
+    tag = soup.select_one(script_selector)
+    if not tag or not tag.string:
+        return ValidationReport(
+            ok=False,
+            reason=f"script_selector {script_selector!r} 으로 스크립트/내용 없음",
+        )
+
+    try:
+        state = json.loads(tag.string.strip())
+    except json.JSONDecodeError as e:
+        return ValidationReport(
+            ok=False,
+            reason=f"스크립트 내용 JSON 파싱 실패: {e}",
+        )
+
+    items = _traverse_path(state, item_path)
+    if items is None:
+        return ValidationReport(
+            ok=False,
+            reason=f"item_path {item_path!r} 경로 도달 실패 (중간 키 누락)",
+        )
+
+    if not isinstance(items, list):
+        return ValidationReport(
+            ok=False,
+            reason=f"item_path 끝 값이 list 아님 (type={type(items).__name__})",
+        )
+
+    if len(items) < MIN_LIST_ROWS:
+        return ValidationReport(
+            ok=False,
+            reason=f"배열 길이 {len(items)} < {MIN_LIST_ROWS}",
+            items_extracted=len(items),
+        )
+
+    # 제목성 필드 추출 비율 검사
+    titles: list = []
+    matched = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        picked = _pick_title(item)
+        if picked and len(picked) >= MIN_TITLE_LEN:
+            titles.append(picked)
+            matched += 1
+
+    fields_matched = {"title": matched}
+    match_ratio = matched / len(items)
+    if match_ratio < MIN_TITLE_MATCH_RATIO:
+        return ValidationReport(
+            ok=False,
+            reason=(
+                f"제목성 필드 추출 비율 {match_ratio:.0%} ({matched}/{len(items)}) "
+                f"< {MIN_TITLE_MATCH_RATIO:.0%}"
+            ),
+            items_extracted=len(items),
+            fields_matched=fields_matched,
+            sample_titles=titles[:3],
+        )
+
+    if _all_ui_noise(titles):
+        return ValidationReport(
+            ok=False,
+            reason="추출된 제목이 모두 UI/네비 키워드 — item_path 가 네비/필터 배열일 가능성",
+            items_extracted=len(items),
+            fields_matched=fields_matched,
+            sample_titles=titles[:3],
+        )
+
     return ValidationReport(
-        ok=False,
-        reason="validate_embedded_json_config: Phase 2 에서 실제 구현 예정 (현재 stub)",
+        ok=True,
+        items_extracted=len(items),
+        fields_matched=fields_matched,
+        sample_titles=titles[:3],
     )
+
+
+def _traverse_path(state: Any, path: str) -> Any:
+    """dot-notation path 로 state 내부 값에 도달. 실패 시 None."""
+    if not path:
+        return state
+    cur = state
+    for part in path.split("."):
+        if isinstance(cur, dict):
+            if part not in cur:
+                return None
+            cur = cur[part]
+        elif isinstance(cur, list) and part.isdigit():
+            idx = int(part)
+            if idx >= len(cur):
+                return None
+            cur = cur[idx]
+        else:
+            return None
+    return cur
+
+
+def _pick_title(item: dict) -> str:
+    """아이템 dict 에서 제목 후보 필드 첫 매치 반환."""
+    for key in EMBEDDED_TITLE_KEYS:
+        if key in item:
+            v = item[key]
+            if isinstance(v, str):
+                return v.strip()
+            # nested dict (예: {"title": {"text": "..."}}) — 흔한 몇 가지만 시도
+            if isinstance(v, dict):
+                for inner in ("text", "name", "value"):
+                    if inner in v and isinstance(v[inner], str):
+                        return v[inner].strip()
+    return ""

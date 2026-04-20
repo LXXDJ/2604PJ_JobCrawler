@@ -134,6 +134,7 @@ def cmd_analyze(url: str):
         HeuristicStrategy,
         LLMStrategy,
         PlaywrightDiscoveryStrategy,
+        EmbeddedJSONStrategy,
     )
 
     analyzer = SiteAnalyzer(
@@ -151,6 +152,15 @@ def cmd_analyze(url: str):
             PlaywrightDiscoveryStrategy(
                 enabled=USE_PLAYWRIGHT_DISCOVERY,
                 use_llm_ranker=USE_LLM_API_RANKER and USE_LLM,
+                llm_api_key=LLM_API_KEY,
+                llm_model=LLM_MODEL,
+            ),
+            EmbeddedJSONStrategy(
+                enabled=True,
+                timeout=HTTP_TIMEOUT,
+                max_retries=HTTP_MAX_RETRIES,
+                retry_backoff=HTTP_RETRY_BACKOFF,
+                use_llm=USE_LLM,
                 llm_api_key=LLM_API_KEY,
                 llm_model=LLM_MODEL,
             ),
@@ -196,6 +206,7 @@ def cmd_add(url: str):
         HeuristicStrategy,
         LLMStrategy,
         PlaywrightDiscoveryStrategy,
+        EmbeddedJSONStrategy,
     )
     import sites_registry
 
@@ -214,6 +225,15 @@ def cmd_add(url: str):
             PlaywrightDiscoveryStrategy(
                 enabled=USE_PLAYWRIGHT_DISCOVERY,
                 use_llm_ranker=USE_LLM_API_RANKER and USE_LLM,
+                llm_api_key=LLM_API_KEY,
+                llm_model=LLM_MODEL,
+            ),
+            EmbeddedJSONStrategy(
+                enabled=True,
+                timeout=HTTP_TIMEOUT,
+                max_retries=HTTP_MAX_RETRIES,
+                retry_backoff=HTTP_RETRY_BACKOFF,
+                use_llm=USE_LLM,
                 llm_api_key=LLM_API_KEY,
                 llm_model=LLM_MODEL,
             ),
@@ -277,11 +297,14 @@ def cmd_add(url: str):
 
     print(f"\n  site_id    : {site_id}")
 
-    # --- 2차 검증: validator 로 실제 HTML 에서 selectors 동작 확인 ---
+    # --- 2차 검증: validator 로 실제 HTML/state 에서 config 동작 확인 ---
     # analyzer 가 받은 HTML 을 노출하지 않으므로 한 번 더 fetch.
-    # LLM 이 환각한 selectors 나 stale 테마를 여기서 잡는다.
+    # LLM 이 환각한 selectors/경로나 stale 테마를 여기서 잡는다.
     from http_client import fetch
-    from analyzer.validator import validate_dom_config
+    from analyzer.validator import (
+        validate_dom_config,
+        validate_embedded_json_config,
+    )
 
     try:
         html = fetch(
@@ -300,7 +323,14 @@ def cmd_add(url: str):
         print(f"\n[거부] 신 스키마 변환 실패: {type(e).__name__}: {e}")
         return
 
-    report = validate_dom_config(html, new_config)
+    method = new_config["extraction_method"]
+    if method == "dom":
+        report = validate_dom_config(html, new_config)
+    elif method == "embedded_json":
+        report = validate_embedded_json_config(html, new_config)
+    else:
+        print(f"\n[거부] extraction_method={method!r} 에 대한 validator 없음")
+        return
     print(f"\n  validator  : ok={report.ok}")
     if report.sample_titles:
         print(f"               샘플 제목: {report.sample_titles}")

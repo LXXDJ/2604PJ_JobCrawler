@@ -20,6 +20,7 @@ class SiteType(Enum):
     WORDPRESS = "wordpress"        # WordPress
     STATIC_HTML = "static_html"    # 단순 정적 HTML
     API_DISCOVERED = "api_discovered"  # SPA 내부 API 가 Playwright 로 발견된 상태
+    EMBEDDED_JSON_DISCOVERED = "embedded_json_discovered"  # HTML <script> 안에서 SSR state 발견됨
     UNKNOWN = "unknown"            # 식별 실패
 
 

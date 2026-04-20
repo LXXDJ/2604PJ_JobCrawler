@@ -34,23 +34,23 @@ from typing import Optional
 from urllib.parse import parse_qsl, urlparse, urlunparse
 
 
-# extraction_method → Phase 1 에서 매핑된 크롤러 모듈명
+# extraction_method → 등록된 크롤러 모듈명
 # dispatcher 가 실제 import 하므로 여기선 "등록 가능한 방법 목록" 역할만.
 EXTRACTION_METHOD_TO_CRAWLER = {
     "dom": "dom_crawler",
-    # "api":           "api_crawler",       # Phase 3
-    # "embedded_json": "embedded_crawler",  # Phase 2
+    "embedded_json": "embedded_crawler",  # Phase 2
+    # "api":           "api_crawler",     # Phase 3
 }
 
 
-# SiteType → ExtractionMethod 추론 (Phase 1 제한된 매핑)
+# SiteType → ExtractionMethod 추론.
 # analyzer 가 extraction_method 를 직접 반환하도록 바뀌기 전까지 임시 사용.
 SITE_TYPE_TO_EXTRACTION_METHOD = {
     "gnuboard": "dom",
     "static_html": "dom",
     "wordpress": "dom",
-    "api_discovered": "api",  # crawler 미구현 — can_register 가 거부
-    # spa_* 는 Phase 2 에서 embedded_json 경로 뚫리면 채움
+    "api_discovered": "api",                          # crawler 미구현 — can_register 가 거부
+    "embedded_json_discovered": "embedded_json",      # Phase 2
 }
 
 
@@ -179,6 +179,27 @@ def _gnuboard_analysis_to_source(result, url: str) -> dict:
     }
 
 
+def _embedded_json_analysis_to_source(result, url: str) -> dict:
+    """embedded_json 분석 결과 → source 블록.
+
+    analyzer 가 내는 flat config (EmbeddedJSONStrategy):
+        {platform, base_url, script_selector, item_path, ...}
+    """
+    parsed = urlparse(url)
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    list_params = {k: v for k, v in query_pairs if k.lower() != "page"}
+    list_url = urlunparse(parsed._replace(query=""))
+
+    c = result.config
+    return {
+        "list_url": list_url,
+        "list_params": list_params,
+        "base_url": c.get("base_url") or f"{parsed.scheme}://{parsed.netloc}",
+        "script_selector": c.get("script_selector", "script#__NEXT_DATA__"),
+        "item_path": c.get("item_path", ""),
+    }
+
+
 def _static_html_analysis_to_source(result, url: str) -> dict:
     """static_html 분석 결과 → source 블록.
 
@@ -222,24 +243,32 @@ def analysis_to_new_schema_config(result, url: str) -> dict:
     if method is None:
         raise ValueError(f"site_type={site_type!r} 에 대한 extraction_method 추론 매핑 없음")
 
-    if method != "dom":
+    if method not in EXTRACTION_METHOD_TO_CRAWLER:
         raise ValueError(
-            f"extraction_method={method!r} 은 Phase 1 범위 밖 — 등록 불가 "
+            f"extraction_method={method!r} 은 이 Phase 에서 구현 안 됨 — 등록 불가 "
             f"(site_type={site_type})"
         )
 
-    if site_type == "gnuboard":
-        source = _gnuboard_analysis_to_source(result, url)
-    elif site_type == "static_html":
-        source = _static_html_analysis_to_source(result, url)
+    if method == "dom":
+        if site_type == "gnuboard":
+            source = _gnuboard_analysis_to_source(result, url)
+        elif site_type == "static_html":
+            source = _static_html_analysis_to_source(result, url)
+        else:
+            # wordpress 등 DOM 이지만 변환 템플릿 아직 없음
+            raise ValueError(
+                f"site_type={site_type!r} DOM 변환 템플릿 미구현"
+            )
+    elif method == "embedded_json":
+        source = _embedded_json_analysis_to_source(result, url)
     else:
-        # wordpress 등 DOM 이지만 변환 템플릿 아직 없음 → Phase 에서 추가
+        # 매핑에 있는데 변환 분기 안 탄 경우 — 방어
         raise ValueError(
-            f"site_type={site_type!r} 변환 템플릿 미구현 (Phase 1 에선 gnuboard/static_html 만)"
+            f"method={method!r} 변환 분기 없음 (분석만 되고 config 변환 미구현)"
         )
 
     return {
-        "extraction_method": "dom",
+        "extraction_method": method,
         "requires_render": False,
         "source": source,
         "pagination": {"type": "url_param", "param": "page", "start": 1},
@@ -292,11 +321,16 @@ def can_register(analysis_result) -> tuple[bool, str]:
             f"extraction_method={method!r} 크롤러가 이 Phase 에서 구현 안 됨"
         )
 
-    # 6. DOM 에 한해 selectors 최소 조건
+    # 6. method 별 최소 구조 조건
     if method == "dom":
         selectors = config.get("selectors") or {}
         if not selectors.get("list_rows") or not selectors.get("subject_link"):
             return False, "selectors.list_rows / subject_link 비어있음 (필수)"
+    elif method == "embedded_json":
+        if not config.get("script_selector"):
+            return False, "script_selector 비어있음 (필수)"
+        if not config.get("item_path"):
+            return False, "item_path 비어있음 — embedded state 안 배열 경로를 찾지 못했음"
 
     return True, ""
 

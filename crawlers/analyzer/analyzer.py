@@ -12,10 +12,11 @@ from .strategies import (
     HeuristicStrategy,
     LLMStrategy,
     PlaywrightDiscoveryStrategy,
+    EmbeddedJSONStrategy,
 )
 
 
-# heuristic 이 이 타입 중 하나를 반환하면 Playwright 로 API 발견 시도
+# heuristic 이 이 타입 중 하나를 반환하면 SPA-전용 전략 (playwright / embedded_json) 호출
 SPA_TYPES = {
     SiteType.SPA_NUXT,
     SiteType.SPA_NEXT,
@@ -57,6 +58,12 @@ class SiteAnalyzer:
             self.strategies = [
                 HeuristicStrategy(enabled=True),
                 PlaywrightDiscoveryStrategy(enabled=use_playwright),
+                EmbeddedJSONStrategy(
+                    enabled=True,
+                    use_llm=use_llm,
+                    llm_api_key=llm_api_key,
+                    llm_model=llm_model,
+                ),
                 LLMStrategy(
                     enabled=use_llm,
                     api_key=llm_api_key,
@@ -70,34 +77,41 @@ class SiteAnalyzer:
 
         라우팅 규칙:
           - heuristic 이 SPA 로 판정 → playwright_discovery 실행 (가능하면)
-          - heuristic 이 유효하고 SPA 아님 → 그 결과 바로 반환
-          - heuristic 유효하지 않음 (예: static_html with low confidence)
-            → LLM 폴백
+            → 실패하면 embedded_json 시도 (__NEXT_DATA__ 같은 SSR state 추출)
+            → 모두 실패 시 LLM 은 스킵 (SPA HTML 은 빈 껍데기라 의미 없음)
+          - heuristic 이 SPA 아니고 유효 → 그 결과 바로 반환
+          - heuristic 유효하지 않음 (예: static_html with low confidence) → LLM 폴백
         """
-        last_result = None
+        last_result: Optional[AnalysisResult] = None
+        heuristic_type: Optional[SiteType] = None
 
         for strategy in self.strategies:
             if not strategy.enabled:
                 continue
 
-            # Playwright 는 직전 결과가 SPA 인 경우만 돌림 (브라우저 띄우는 비용 크므로)
-            if strategy.name == "playwright_discovery":
-                if last_result is None or last_result.site_type not in SPA_TYPES:
+            # SPA 전용 전략들 (playwright / embedded_json) — heuristic 이 SPA 판정한 경우만 실행
+            if strategy.name in ("playwright_discovery", "embedded_json"):
+                if heuristic_type not in SPA_TYPES:
                     continue
+                # 직전 전략이 이미 유효한 결과를 냈으면 (예: playwright 가 API 찾음) 루프 안에서
+                # 이미 return 했을 것 — 여기 도달했다는 건 앞선 SPA 시도가 실패했다는 의미.
 
-            # LLM 은 heuristic 이 SPA 를 고신뢰로 잡았으면 스킵
-            # (SPA HTML 은 빈 껍데기라 LLM 도 의미 있는 selectors 못 뽑음)
+            # LLM 은 SPA 에선 스킵 (HTML 이 빈 껍데기라 의미 있는 selectors 못 뽑음)
             if strategy.name == "llm":
-                if last_result is not None and last_result.site_type in SPA_TYPES:
+                if heuristic_type in SPA_TYPES:
                     continue
 
             result = strategy.run(url)
             if result is None:
                 continue
 
+            # heuristic 결과를 기억해서 이후 SPA 전용 분기 라우팅에 사용
+            if strategy.name == "heuristic":
+                heuristic_type = result.site_type
+
             last_result = result
 
-            # SPA heuristic 결과는 short-circuit 하지 않음 — playwright 에게 기회 주기
+            # SPA heuristic 결과는 short-circuit 하지 않음 — playwright/embedded_json 에 기회
             if result.site_type in SPA_TYPES and result.config.get("needs_playwright_discovery"):
                 continue
 
