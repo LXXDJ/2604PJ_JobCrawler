@@ -19,7 +19,10 @@
         "content": "div.view-content"
       },
       "parse_mode": "sr_only",
-      "skip_row_if_has_class": ["fz_list_th", "na-table-head"],
+      "skip_row_if_has_class": [
+        "fz_list_th",
+        "na-table-head"
+      ],
       "external_id_from_url_param": "wr_id",
       "theme": "nariya"
     },
@@ -59,7 +62,10 @@
         "content": "#bo_v_con"
       },
       "parse_mode": "direct",
-      "skip_row_if_has_class": ["fz_list_th", "na-table-head"],
+      "skip_row_if_has_class": [
+        "fz_list_th",
+        "na-table-head"
+      ],
       "external_id_from_url_param": "wr_id",
       "theme": "fz"
     },
@@ -75,6 +81,51 @@
       "items_extracted": 0,
       "fields_matched": {},
       "sample_titles": []
+    }
+  },
+  {
+    "site_id": "jobkorea",
+    "url": "https://www.jobkorea.co.kr/recruit/joblist",
+    "site_type": "static_html",
+    "added_at": "2026-04-20T06:03:21.499538+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://www.jobkorea.co.kr/recruit/joblist",
+      "list_params": {},
+      "base_url": "https://www.jobkorea.co.kr",
+      "selectors": {
+        "list_rows": ".devloopArea",
+        "subject_link": ".tplTit > div > strong > a",
+        "author": "unknown",
+        "date": ".time",
+        "hit": "unknown",
+        "content": "unknown"
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 63,
+      "fields_matched": {
+        "title": 60,
+        "author": 0,
+        "date": 60,
+        "hit": 0
+      },
+      "sample_titles": [
+        "[GS리테일] 4월 경력사원 채용(데이터사이언티스트/데이터엔지니어/B2B영업)",
+        "건설부 사무직/창고직 신입 및 경력 모집",
+        "[로에일/니브] 한남동 쇼룸 세일즈 스테프 모집(여성의류 브랜드)"
+      ]
     }
   }
 ]
