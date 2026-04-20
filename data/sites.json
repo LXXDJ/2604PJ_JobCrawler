@@ -366,5 +366,56 @@
         "롯데리아 화성반월점[롯데리아 화성반월점] 관리자,아르바이트 모집-평일/주말/주3일,주5일"
       ]
     }
+  },
+  {
+    "site_id": "radiokorea",
+    "url": "https://www.radiokorea.com/community/jobs.php",
+    "site_type": "gnuboard",
+    "added_at": "2026-04-20T07:49:39.900170+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "/bbs/board.php",
+      "list_params": {
+        "bo_table": ""
+      },
+      "base_url": "",
+      "selectors": {
+        "list_rows": ".pp-list > li",
+        "subject_link": "a > div.info > h1",
+        "author": "div.info > h2",
+        "date": "div.region",
+        "hit": null,
+        "content": null
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": [
+        "fz_list_th",
+        "na-table-head"
+      ],
+      "external_id_from_url_param": "wr_id",
+      "theme": "unknown"
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 95,
+      "fields_matched": {
+        "title": 93,
+        "author": 93,
+        "date": 93
+      },
+      "sample_titles": [
+        "PCB BANK",
+        "GoldenState Imports",
+        "Shinhan Bank America"
+      ]
+    }
   }
 ]

@@ -24,6 +24,17 @@ SPA_TYPES = {
     SiteType.SPA_REACT,
 }
 
+# DOM selectors 가 필수인 site_type 들.
+# heuristic 이 이 타입을 자신 있게 잡아도 (confidence ≥ min) selectors 가 비어있으면
+# 그대로 반환하면 can_register 에서 거부되므로, LLM 으로 selectors 만 보충해야 한다.
+# (예: radiokorea — /bbs/board.php 시그니처로 gnuboard 확정했지만 테마를 na-table/fz 중
+#  어디에도 못 맞춘 케이스)
+DOM_SELECTOR_REQUIRED_TYPES = {
+    SiteType.GNUBOARD,
+    SiteType.STATIC_HTML,
+    SiteType.WORDPRESS,
+}
+
 
 class SiteAnalyzer:
     """
@@ -116,6 +127,15 @@ class SiteAnalyzer:
                 continue
 
             if result.is_valid(self.min_confidence):
+                # Phase 2.8: heuristic 이 DOM 타입을 확정했지만 selectors 가 비어있으면
+                # 그대로 반환하면 can_register 에서 거부됨 — LLM 으로 selectors 만 보충.
+                if (
+                    strategy.name == "heuristic"
+                    and _needs_selector_enrichment(result)
+                ):
+                    enriched = self._enrich_with_llm_selectors(url, result)
+                    if enriched is not None:
+                        return enriched
                 return result
 
         if last_result:
@@ -128,3 +148,61 @@ class SiteAnalyzer:
             strategy_name="none",
             notes="모든 전략이 None 을 반환했거나 비활성화됨",
         )
+
+    def _enrich_with_llm_selectors(
+        self, url: str, heuristic_result: AnalysisResult
+    ) -> Optional[AnalysisResult]:
+        """
+        heuristic 이 확정한 site_type 을 그대로 두고, LLM 을 별도 호출해 selectors 만 보충.
+
+        예: radiokorea 에서 heuristic 이 "/bbs/board.php" 시그니처로 gnuboard 확정하지만
+        테마(na-table/fz)를 못 맞춰 selectors={} 로 반환한 경우. 여기서 LLM 에 던지면
+        실제 HTML 구조 기반 selectors 를 받아 병합할 수 있다.
+
+        성공 시 병합된 AnalysisResult, LLM 이 없거나 유효 selectors 못 받으면 None.
+        """
+        llm_strategy = next(
+            (s for s in self.strategies if s.name == "llm" and s.enabled),
+            None,
+        )
+        if llm_strategy is None:
+            return None
+
+        llm_result = llm_strategy.run(url)
+        if llm_result is None:
+            return None
+
+        llm_selectors = (llm_result.config or {}).get("selectors") or {}
+        if not llm_selectors.get("list_rows") or not llm_selectors.get("subject_link"):
+            return None
+
+        # heuristic 기반 config 에 LLM 의 selectors/theme/parse_mode 만 덮어쓰기.
+        merged_config = dict(heuristic_result.config or {})
+        merged_config["selectors"] = llm_selectors
+        for k in ("theme", "parse_mode"):
+            v = (llm_result.config or {}).get(k)
+            if v:
+                merged_config[k] = v
+
+        merged_notes = (
+            f"{heuristic_result.notes} + LLM 으로 selectors 보충"
+            if heuristic_result.notes
+            else "LLM 으로 selectors 보충"
+        )
+
+        return AnalysisResult(
+            url=url,
+            site_type=heuristic_result.site_type,
+            confidence=heuristic_result.confidence,
+            config=merged_config,
+            strategy_name=f"{heuristic_result.strategy_name}+llm_selectors",
+            notes=merged_notes,
+        )
+
+
+def _needs_selector_enrichment(result: AnalysisResult) -> bool:
+    """DOM selectors 가 필요한 타입인데 list_rows/subject_link 가 비어있으면 True."""
+    if result.site_type not in DOM_SELECTOR_REQUIRED_TYPES:
+        return False
+    selectors = (result.config or {}).get("selectors") or {}
+    return not selectors.get("list_rows") or not selectors.get("subject_link")
