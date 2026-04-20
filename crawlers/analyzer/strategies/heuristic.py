@@ -140,9 +140,11 @@ class HeuristicStrategy(AnalysisStrategy):
             return SiteType.GNUBOARD, confidence, gnuboard_signatures
 
         # Nuxt.js (Vue 기반 SSR)
+        # 주의: 단순히 "__NUXT__" 문자열 매칭은 블로그 글/트래킹 JS 에서도 오탐될 수 있음.
+        # 실제 할당 (`window.__NUXT__=`) 또는 번들 경로(`/_nuxt/`) 또는 n-head 속성 요구.
         nuxt_signatures = []
-        if "__NUXT__" in html:
-            nuxt_signatures.append("__NUXT__")
+        if re.search(r"window\.__NUXT__\s*=", html):
+            nuxt_signatures.append("window.__NUXT__=")
         if "/_nuxt/" in html:
             nuxt_signatures.append("/_nuxt/")
         if 'data-n-head' in html:
@@ -152,9 +154,11 @@ class HeuristicStrategy(AnalysisStrategy):
             return SiteType.SPA_NUXT, confidence, nuxt_signatures
 
         # Next.js (React 기반 SSR)
+        # 주의: `__NEXT_DATA__` 단순 매칭은 문자열/주석에서도 나올 수 있어 script 태그
+        # id 로 한정. `/_next/` 는 번들 경로라 위조 가능성 낮음.
         next_signatures = []
-        if "__NEXT_DATA__" in html:
-            next_signatures.append("__NEXT_DATA__")
+        if re.search(r'id\s*=\s*["\']__NEXT_DATA__["\']', html):
+            next_signatures.append('id="__NEXT_DATA__"')
         if "/_next/" in html:
             next_signatures.append("/_next/")
         if next_signatures:

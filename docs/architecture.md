@@ -261,6 +261,8 @@ crawlers/
 | `embedded_crawler.py` | ✓ 완료 (Phase 2) + 렌더 경로 (Phase 2.5) | |
 | `strategies/embedded_json.py` | ✓ 완료 (Phase 2) + 렌더 폴백 (Phase 2.5) | `__NUXT__` 팩토리 대응 |
 | `strategies/playwright_discovery.py` LLM 명시 거부 존중 | ✓ 완료 (Phase 2.5) | 환각 방어 — 규칙점수 폴백 금지 |
+| `strategies/llm.py` excerpt 개선 | ✓ 완료 (Phase 2.6) | script 제거 + 속성 절단 + dense-window |
+| `strategies/heuristic.py` SPA 시그니처 엄격화 | ✓ 완료 (Phase 2.6) | 문자열 매칭 → 할당/id 속성 매칭 |
 | `strategies/` → `extractors/` 디렉토리 개명 | 미완 | 이름 충돌 없고 영향 크지 않아 후순위 |
 | `api_crawler.py` | 미완 (Phase 3) | camhr 일반화 대상 |
 | `camhr_crawler.py` → sites.json 이주 | 미완 (Phase 3) | |
@@ -295,26 +297,31 @@ hanin 과 동일 경로, 8건 수집.
    "모두 카테고리/필터/광고" → **`""` 명시 거부**, 휴리스틱 폴백 금지
 4. 등록 거부. 정직한 실패. (공고 리스트가 initial state 에 없고 user 상호작용 후 XHR 로만 로드)
 
-### JobKorea `/Search/` — ✗ Phase 2.5 범위 밖
-1. Heuristic → `spa_nuxt` (HTML 안 `__NUXT__` 문자열 오탐)
+### JobKorea `/Search/` (Next.js CSR) — ✗ 정직한 실패
+1. Heuristic → `spa_next` (`/_next/` 시그니처 39회)
 2. PlaywrightDiscoveryStrategy → 16개 XHR 캡처, 전부 `codes/benefit` 등 메타 API,
    LLM=-1 → UNKNOWN (환각 방어 적용 후 정상)
 3. EmbeddedJSONStrategy HTML 경로 → `#__NEXT_DATA__` 없음
-4. EmbeddedJSONStrategy 렌더 경로 (Phase 2.5) → `window.__NEXT_DATA__` /
-   `__NUXT__` / `__INITIAL_STATE__` / `__APOLLO_STATE__` **전부 없음** → UNKNOWN
-5. LLMStrategy → SPA 로 판정했으니 스킵
-6. 등록 거부. Phase 2.5 의 표준 state 패턴 밖. (JobKorea 는 custom XHR + 세션 기반)
+4. EmbeddedJSONStrategy 렌더 경로 → `window.__NEXT_DATA__` / `__NUXT__` /
+   `__INITIAL_STATE__` / `__APOLLO_STATE__` **전부 없음** → UNKNOWN
+5. LLMStrategy → SPA 로 판정됐으니 스킵 (HTML 이 빈 껍데기라 selectors 불가)
+6. 등록 거부. CSR + custom XHR + 세션 — 표준 패턴 밖. `/recruit/joblist` 로 유도.
 
-### JobKorea `/recruit/joblist` — ✗ 별개 병목
-실측 결과: HTML 에 `tr.devloopArea` 60개로 **공고가 SSR 렌더**됨. 원래 DOM
-크롤링으로 풀려야 하나:
-1. Heuristic 이 HTML 안 `__NUXT__` 문자열 (공용 번들/트래킹) 에 낚여 `spa_nuxt` 오탐
-2. 그 결과 DOM selector 생성 경로 (LLMStrategy) 가 스킵됨
-3. 최종 config 는 `selectors: {}` → can_register 거부
+### JobKorea `/recruit/joblist` (SSR) — ✓ Phase 2.6 해결
+실측: HTML 내 `tr.devloopArea` 64개로 **공고가 SSR 렌더**됨.
+1. Heuristic → `static_html` (0.3 confidence — SPA 시그니처 0개)
+2. LLMStrategy → `static_html` 0.9 confidence, 정확한 selectors:
+   - `list_rows: tr.devloopArea`
+   - `subject_link: td.tplTit a.link`
+   - `author: td.tplCo a.link`
+   - `date: span.time`
 
-**Phase 2.6 해결 과제**:
-- Heuristic 의 `__NUXT__` 시그니처를 더 엄격하게 (단순 문자열 매칭 → DOM 구조 동반 확인)
-- 또는 LLMStrategy 가 SPA 판정이어도 DOM 에 공고가 보이면 selectors 생성 시도
+**Phase 2.6 개선점** (이걸 가능하게 한 것):
+- `_build_llm_excerpt`: script/style/주석 제거 + 긴 속성값 절단 + 공백 축소 +
+  반복 DOM 구간 검색 (tbody+5tr+anchor 우선, 그 외 같은 class 10회+anchor)
+- MAX_HTML_CHARS 20k → 150k (정리 후 기준)
+- Heuristic `__NUXT__` → `window.__NUXT__=` 정규식 할당 매칭으로 엄격화
+- Heuristic `__NEXT_DATA__` → `id="__NEXT_DATA__"` 속성 매칭으로 엄격화
 
 ---
 
@@ -340,10 +347,19 @@ hanin 과 동일 경로, 8건 수집.
 - 실측: JobKorea 는 표준 state 패턴 밖 → 정직한 실패. 다른 Nuxt 팩토리 /
   CSR 사이트에는 유효.
 
-### Phase 2.6: JobKorea 트랙 (다음) — 미완
-- Heuristic `__NUXT__` / `__NEXT_DATA__` 오탐 수정 (DOM 구조 동반 확인)
-- LLMStrategy 가 SPA 판정이어도 DOM 에 공고가 보이면 selectors 생성 시도
-- JobKorea `/recruit/joblist` 가 DOM 경로로 풀리도록
+### Phase 2.6: LLM excerpt 개선 + Heuristic SPA 엄격화 — ✓ 완료
+- `_build_llm_excerpt`: 대형 사이트(JobKorea 급)에서 실제 목록 DOM 이 HTML offset
+  100k+ 뒤에 있어 기존 20k excerpt 로 LLM 이 selectors 환각하던 문제 해결.
+  - script/style/noscript/HTML 주석 제거
+  - 긴 속성값(>200자, 보통 inline JSON data-*) 절단
+  - 공백 축소
+  - 반복 DOM 구간 검색 (tbody+tr+anchor 우선) 후 head+dense-window 조합
+  - MAX_HTML_CHARS 20k → 150k
+- Heuristic `__NUXT__` 매칭을 `window.__NUXT__=` 할당 정규식으로 엄격화
+  (문자열/주석 오탐 방지)
+- Heuristic `__NEXT_DATA__` 매칭을 `id="__NEXT_DATA__"` 속성으로 엄격화
+- 실측: JobKorea `/recruit/joblist` → `tr.devloopArea` + `td.tplTit a.link` 등
+  정확한 selectors 생성. confidence 0.9.
 
 ### Phase 3: API 경로 일반화 — 미완
 - `api_crawler.py` 구현 (camhr 일반화)

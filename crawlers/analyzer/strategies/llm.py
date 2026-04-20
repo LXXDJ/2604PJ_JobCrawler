@@ -24,9 +24,155 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-# 토큰 절약용 — HTML 앞부분만 LLM 에 보냄.
-# 보통 <head> + 상단 콘텐츠 + 스크립트 시그니처 식별에 충분.
-MAX_HTML_CHARS = 20000
+# LLM 에게 보낼 excerpt 최대 길이 (정리 후 기준).
+# gpt-4o-mini 기준 150k chars ≈ 40~60k tokens → 건당 약 $0.008. 정리 후에도 JobKorea 급
+# 대형 사이트는 목록 DOM 이 100k+ offset 에 있어서 이 정도 필요.
+# 1회성 1500 사이트 분석 비용 ≈ $12 — 허용범위.
+MAX_HTML_CHARS = 150000
+
+# 속성 하나의 최대 길이. 지나치게 큰 data-* 속성(예: JSON 덤프)은 이 길이로 잘라
+# 선택자 추출용 DOM 구조가 excerpt 안에 들어올 수 있도록 한다.
+MAX_ATTR_VALUE_CHARS = 200
+
+# script/style/noscript 태그는 대부분의 사이트에서 excerpt 앞부분을 독점해
+# 실제 DOM 구조(게시판 행, 목록 컨테이너 등) 가 LLM 에게 안 보이는 문제를 일으킨다.
+# 예: JobKorea `/recruit/joblist` 는 첫 560KB 가 tracking/분석 JS, 실제 `tr.devloopArea`
+# 는 offset 568k 에 등장 — 20k excerpt 로는 절대 안 잡힘.
+# → excerpt 만들기 전에 <script>/<style>/<noscript>/주석 제거.
+_CLEAN_STRIP_PATTERNS = [
+    re.compile(r"<script\b[^>]*>.*?</script\s*>", re.IGNORECASE | re.DOTALL),
+    re.compile(r"<style\b[^>]*>.*?</style\s*>", re.IGNORECASE | re.DOTALL),
+    re.compile(r"<noscript\b[^>]*>.*?</noscript\s*>", re.IGNORECASE | re.DOTALL),
+    re.compile(r"<!--.*?-->", re.DOTALL),
+]
+
+# 따옴표로 둘러싸인 속성값: attr="..." 또는 attr='...'
+_ATTR_VALUE_PATTERN = re.compile(r"""(\s[a-zA-Z_:][\w:.-]*\s*=\s*)("([^"]*)"|'([^']*)')""")
+
+
+def _truncate_large_attributes(html: str, max_attr_chars: int = MAX_ATTR_VALUE_CHARS) -> str:
+    """
+    긴 속성값(보통 inline JSON in data-* 같은 경우) 을 자른다.
+    JobKorea 같이 지역 필터가 data-districts='[{...huge JSON...}]' 형태로
+    수십 KB 씩 점유하는 경우, DOM 구조가 excerpt 끝으로 밀려나 LLM 이 못 본다.
+    """
+    def _replace(m: re.Match) -> str:
+        prefix = m.group(1)  # " attr="
+        quote = m.group(2)[0]  # " 또는 '
+        value = m.group(3) if m.group(3) is not None else m.group(4)
+        if len(value) <= max_attr_chars:
+            return m.group(0)
+        truncated = value[:max_attr_chars] + "...[truncated]"
+        return f"{prefix}{quote}{truncated}{quote}"
+
+    return _ATTR_VALUE_PATTERN.sub(_replace, html)
+
+
+def _collapse_whitespace(html: str) -> str:
+    """태그 사이 공백/개행 축소 — excerpt 에 더 많은 DOM 을 담는다."""
+    # 연속 공백/탭/개행을 공백 하나로
+    return re.sub(r"\s+", " ", html)
+
+
+def _find_list_dense_window(
+    html: str, window_size: int, scan_from: int = 0
+) -> Optional[tuple[int, int]]:
+    """
+    HTML 에서 '목록 DOM 이 집중된 구간' 을 찾는다.
+
+    우선순위:
+      1) <tbody> 중 다음 3000자 안에 <tr> 5개 이상 + <a href=> 있는 곳 (테이블 목록)
+      2) 같은 (tag, class) 쌍이 10회 이상 반복되고 그 구간에 <a href=> 있는 곳
+         → <a href=> 가 없으면 필터/체크박스 리스트일 확률이 높아 제외
+
+    Returns: (start, end) index 튜플, 없으면 None
+    """
+    # 1) <tbody> 후보 — 테이블 기반 목록 사이트 (JobKorea, 그누보드 일부 등)
+    for tb in re.finditer(r"<tbody\b", html[scan_from:], re.IGNORECASE):
+        pos = tb.start() + scan_from
+        window_head = html[pos : pos + 3000]
+        tr_count = len(re.findall(r"<tr\b", window_head, re.IGNORECASE))
+        has_anchor = "<a " in window_head.lower() and "href=" in window_head.lower()
+        if tr_count >= 5 and has_anchor:
+            start = max(0, pos - 500)
+            return (start, min(len(html), start + window_size))
+
+    # 2) 반복 (tag, class) 쌍 — 단, 클러스터 내 <a href=> 요구
+    tag_class_positions: dict[str, list[int]] = {}
+    for m in re.finditer(
+        r'<(tr|li|div|article|section)\b[^>]*class\s*=\s*"([^"]{1,120})"',
+        html[scan_from:],
+        re.IGNORECASE,
+    ):
+        key = f'{m.group(1).lower()}.{m.group(2)}'
+        tag_class_positions.setdefault(key, []).append(m.start() + scan_from)
+
+    candidates = []
+    for key, positions in tag_class_positions.items():
+        if len(positions) < 10:
+            continue
+        # 클러스터 범위
+        cluster_start = positions[0]
+        cluster_end = min(len(html), positions[min(len(positions) - 1, 9)] + 2000)
+        cluster_text = html[cluster_start:cluster_end].lower()
+        if "<a " in cluster_text and "href=" in cluster_text:
+            candidates.append((key, cluster_start))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x[1])
+    _, earliest = candidates[0]
+    start = max(0, earliest - 500)
+    return (start, min(len(html), start + window_size))
+
+
+def _build_llm_excerpt(html: str, max_chars: int = MAX_HTML_CHARS) -> str:
+    """
+    LLM 에게 보낼 HTML excerpt 를 만든다.
+
+    전략:
+      1) script/style/noscript/HTML 주석 제거 — DOM 구조에 관심 있는데 tracking JS 가
+         앞부분을 가득 채우면 LLM 이 실제 선택자를 못 봄.
+      2) 긴 속성값(>200 chars) 절단 — data-* JSON 덤프 같은 noise 로 실제 DOM 이 밀림.
+      3) 공백 축소 — 불필요한 indent/개행 제거.
+      4) 앞 절반 excerpt + 반복 구조 집중 구간 excerpt 결합 — 목록 DOM 이 뒤쪽에
+         있어도 LLM 이 실제 셀렉터를 볼 수 있도록.
+
+    Returns: 정리된 excerpt (max_chars 이내)
+    """
+    cleaned = html
+    for pat in _CLEAN_STRIP_PATTERNS:
+        cleaned = pat.sub("", cleaned)
+
+    cleaned = _truncate_large_attributes(cleaned)
+    cleaned = _collapse_whitespace(cleaned)
+
+    # 정리 후 텍스트가 비정상적으로 짧으면 (파싱 오류/특이 구조) 원본 앞부분으로 폴백.
+    # SPA 시그니처 (__NUXT__ 등) 는 script 안에 있어 원본에서만 보임 — 완전 폴백.
+    if len(cleaned) < 500:
+        return html[:max_chars]
+
+    # 앞부분이 곧 목록일 때(짧은 페이지, 상단에 <tbody> 등)는 그대로 잘라 반환.
+    if len(cleaned) <= max_chars:
+        return cleaned
+
+    head_size = max_chars // 3
+    tail_budget = max_chars - head_size - 50  # 구분자 여유
+
+    # head_size 이후에서 반복 구조 윈도우 찾기 — 앞부분에 이미 포함된 것 무시
+    dense = _find_list_dense_window(cleaned, tail_budget, scan_from=head_size)
+
+    if dense is None:
+        # 반복 구조 못 찾음 — 그냥 앞부분 max_chars 로 반환
+        return cleaned[:max_chars]
+
+    start, end = dense
+    return (
+        cleaned[:head_size]
+        + "\n<!-- ...[중간 생략]... -->\n"
+        + cleaned[start:end]
+    )
 
 
 SYSTEM_PROMPT = """너는 게시판/구인구직 사이트의 HTML 을 보고 크롤러 설정을 만드는 분석기야.
@@ -118,7 +264,7 @@ class LLMStrategy(AnalysisStrategy):
                     notes=f"HTML 가져오기 실패: {fetch_err}",
                 )
 
-        excerpt = html[:MAX_HTML_CHARS]
+        excerpt = _build_llm_excerpt(html, MAX_HTML_CHARS)
 
         # 2) OpenAI 호출
         try:
