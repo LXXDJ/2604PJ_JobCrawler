@@ -11,7 +11,7 @@ from typing import Optional, Any
 
 
 class SiteType(Enum):
-    """사이트 플랫폼 타입"""
+    """사이트 플랫폼 타입 (분류축 — 진단/통계용)"""
     GNUBOARD = "gnuboard"          # 그누보드 기반 게시판 (한인회, 시엠립 등)
     SPA_NUXT = "spa_nuxt"          # Nuxt.js 기반 SPA (CamHR 등)
     SPA_NEXT = "spa_next"          # Next.js 기반 SPA
@@ -19,8 +19,24 @@ class SiteType(Enum):
     SPA_REACT = "spa_react"        # React SPA
     WORDPRESS = "wordpress"        # WordPress
     STATIC_HTML = "static_html"    # 단순 정적 HTML
-    API_DISCOVERED = "api_discovered"  # SPA 내부 API 가 Playwright 로 발견된 상태 — 수동 어댑터 필요
+    API_DISCOVERED = "api_discovered"  # SPA 내부 API 가 Playwright 로 발견된 상태
     UNKNOWN = "unknown"            # 식별 실패
+
+
+class ExtractionMethod(Enum):
+    """
+    데이터 추출 방법 (로직축 — 크롤러 선택의 유일한 근거)
+
+    SiteType 과 직교한다. 예: Nuxt SPA 사이트라도
+      - XHR 로 API 가 뜨면 API 로 추출
+      - HTML 에 state 가 박혀있으면 EMBEDDED_JSON 로 추출
+      - 둘 다 없고 렌더 후 DOM 에 데이터가 있으면 DOM 로 추출
+
+    crawler/dispatcher 는 이 값만 보고 적절한 크롤러를 선택한다.
+    """
+    DOM = "dom"                          # HTML DOM 요소 (정적 HTML, 렌더 후 HTML, gnuboard 포함)
+    API = "api"                          # XHR/fetch JSON 응답 (순수 SPA)
+    EMBEDDED_JSON = "embedded_json"      # <script> 내 __NUXT__/__NEXT_DATA__ 등 SSR state
 
 
 @dataclass

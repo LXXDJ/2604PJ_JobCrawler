@@ -1,37 +1,55 @@
 [
   {
     "site_id": "hanin",
-    "crawler": "gnuboard_crawler",
     "url": "http://www.hanin.or.kr/bbs/board.php?bo_table=Information",
     "site_type": "gnuboard",
     "added_at": "2026-04-17T07:12:31.999594+00:00",
-    "config": {
-      "platform": "gnuboard",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "http://www.hanin.or.kr/bbs/board.php",
+      "list_params": {
+        "bo_table": "Information"
+      },
       "base_url": "http://www.hanin.or.kr",
-      "bbs_url": "http://www.hanin.or.kr/bbs",
-      "board_table": "Information",
-      "theme": "nariya",
       "selectors": {
         "list_rows": "ul.na-table > li",
         "subject_link": "a.na-subject",
         "author": "span.sv_member",
         "content": "div.view-content"
       },
-      "parse_mode": "sr_only"
+      "parse_mode": "sr_only",
+      "skip_row_if_has_class": ["fz_list_th", "na-table-head"],
+      "external_id_from_url_param": "wr_id",
+      "theme": "nariya"
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "수동 마이그레이션 — 기존 gnuboard_crawler 로 프로덕션 검증 완료",
+      "items_extracted": 0,
+      "fields_matched": {},
+      "sample_titles": []
     }
   },
   {
     "site_id": "siemreap",
-    "crawler": "gnuboard_crawler",
     "url": "https://siemreap.korean.net/bbs/board.php?bo_table=tb33",
     "site_type": "gnuboard",
     "added_at": "2026-04-17T07:12:37.075411+00:00",
-    "config": {
-      "platform": "gnuboard",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://siemreap.korean.net/bbs/board.php",
+      "list_params": {
+        "bo_table": "tb33"
+      },
       "base_url": "https://siemreap.korean.net",
-      "bbs_url": "https://siemreap.korean.net/bbs",
-      "board_table": "tb33",
-      "theme": "fz",
       "selectors": {
         "list_rows": "ul.fz_list > li",
         "subject_link": "div.fz_subject > a",
@@ -40,7 +58,23 @@
         "hit": "div.fz_hit",
         "content": "#bo_v_con"
       },
-      "parse_mode": "direct"
+      "parse_mode": "direct",
+      "skip_row_if_has_class": ["fz_list_th", "na-table-head"],
+      "external_id_from_url_param": "wr_id",
+      "theme": "fz"
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "수동 마이그레이션 — 기존 gnuboard_crawler 로 프로덕션 검증 완료",
+      "items_extracted": 0,
+      "fields_matched": {},
+      "sample_titles": []
     }
   }
 ]

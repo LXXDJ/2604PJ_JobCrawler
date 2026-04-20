@@ -230,15 +230,18 @@ def cmd_add(url: str):
     if result.notes:
         print(f"  notes      : {result.notes}")
 
-    # --- 등록 가능성 체크 ---
+    # --- 등록 가능성 체크 (1차 구조) ---
     ok, reason = sites_registry.can_register(result)
     if not ok:
         print(f"\n[거부] {reason}")
         print("  → sites.json에 등록하지 않음.")
         return
 
-    # --- 하드코딩된 REGISTERED_CRAWLS와의 중복 체크 (config 기준) ---
-    hardcoded_dup = sites_registry.find_duplicate(result.config, REGISTERED_CRAWLS)
+    # --- 중복 체크용: result.config 를 entry 모양으로 감싸기 ---
+    candidate_entry = sites_registry.wrap_flat_config_as_entry(result.config)
+
+    # --- 하드코딩된 REGISTERED_CRAWLS와의 중복 체크 ---
+    hardcoded_dup = sites_registry.find_duplicate(candidate_entry, REGISTERED_CRAWLS)
     if hardcoded_dup:
         print(f"\n[경고] 이 사이트/보드는 REGISTERED_CRAWLS에 이미 등록돼 있음 "
               f"(site_id='{hardcoded_dup['site_id']}').")
@@ -247,9 +250,9 @@ def cmd_add(url: str):
             print("취소.")
             return
 
-    # --- sites.json 내 중복 체크 (같은 사이트/보드인지) ---
+    # --- sites.json 내 중복 체크 ---
     entries = sites_registry.load_all(SITES_JSON_PATH)
-    existing = sites_registry.find_duplicate(result.config, entries)
+    existing = sites_registry.find_duplicate(candidate_entry, entries)
 
     if existing:
         print(f"\n이미 등록된 사이트:")
@@ -274,8 +277,43 @@ def cmd_add(url: str):
 
     print(f"\n  site_id    : {site_id}")
 
-    # --- 저장 ---
-    entries.append(sites_registry.build_entry(result, site_id))
+    # --- 2차 검증: validator 로 실제 HTML 에서 selectors 동작 확인 ---
+    # analyzer 가 받은 HTML 을 노출하지 않으므로 한 번 더 fetch.
+    # LLM 이 환각한 selectors 나 stale 테마를 여기서 잡는다.
+    from http_client import fetch
+    from analyzer.validator import validate_dom_config
+
+    try:
+        html = fetch(
+            url,
+            timeout=HTTP_TIMEOUT,
+            max_retries=HTTP_MAX_RETRIES,
+            retry_backoff=HTTP_RETRY_BACKOFF,
+        )
+    except Exception as e:
+        print(f"\n[거부] 검증용 HTML 재다운로드 실패: {type(e).__name__}: {e}")
+        return
+
+    try:
+        new_config = sites_registry.analysis_to_new_schema_config(result, url)
+    except Exception as e:
+        print(f"\n[거부] 신 스키마 변환 실패: {type(e).__name__}: {e}")
+        return
+
+    report = validate_dom_config(html, new_config)
+    print(f"\n  validator  : ok={report.ok}")
+    if report.sample_titles:
+        print(f"               샘플 제목: {report.sample_titles}")
+    if report.fields_matched:
+        print(f"               매칭: {report.fields_matched}")
+
+    if not report.ok:
+        print(f"\n[거부] validator 실패: {report.reason}")
+        print("  → sites.json에 저장하지 않음. selectors 재확인 필요.")
+        return
+
+    # --- 저장 (validated=true 로 마킹) ---
+    entries.append(sites_registry.build_entry(result, site_id, validation_report=report.to_dict()))
     sites_registry.save_all(SITES_JSON_PATH, entries)
 
     print(f"\n[OK] 등록 완료: {SITES_JSON_PATH}")
@@ -326,38 +364,17 @@ def cmd_crawl():
 
         site_ids = [e["site_id"] for e in all_entries]
 
+        import dispatcher
+
         for entry in all_entries:
             site_id = entry["site_id"]
-            crawler_name = entry["crawler"]
-            config = entry["config"]
-            max_pages = config.get("max_pages")
-
             print(f"\n>>> 크롤링 시작: {site_id}")
 
             try:
-                if crawler_name == "camhr_crawler":
-                    import camhr_crawler
-                    camhr_crawler.crawl(
-                        db_path=DB_PATH,
-                        max_pages=max_pages,
-                    )
-
-                elif crawler_name == "gnuboard_crawler":
-                    import gnuboard_crawler
-                    gnuboard_crawler.crawl(
-                        site_id=site_id,
-                        config=config,
-                        db_path=DB_PATH,
-                        max_pages=max_pages,
-                        http_config=http_config,
-                    )
-
-                else:
-                    print(f"  [WARN] 알 수 없는 크롤러: {crawler_name}")
-
+                dispatcher.dispatch(entry, db_path=DB_PATH, http_config=http_config)
             except Exception as e:
-                # 한 사이트 실패가 전체 crawl을 중단시키지 않게.
-                # 스케줄러로 매일 돌 때는 한 사이트가 죽어도 나머지는 돌아야 함.
+                # 한 사이트 실패가 전체 crawl 을 중단시키지 않게.
+                # 스케줄러로 매일 돌 때 한 사이트가 죽어도 나머지는 돌아야 함.
                 print(f"  [ERROR] {site_id} 크롤링 실패: {type(e).__name__}: {e}")
 
         finished_at = datetime.datetime.now()
