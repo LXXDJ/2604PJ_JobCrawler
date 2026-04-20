@@ -187,19 +187,30 @@ def find_duplicate(candidate_entry: dict, entries: list) -> Optional[dict]:
 def _gnuboard_analysis_to_source(result, url: str) -> dict:
     """gnuboard 분석 결과 → source 블록.
 
-    analyzer 가 내는 config:
-        {platform, base_url, bbs_url, board_table, theme, selectors, parse_mode}
+    URL 구조(list_url / list_params)는 입력 url 을 권위 있는 소스로 사용한다.
+    heuristic 이 주는 bbs_url/board_table 은 템플릿 조립 재료로 쓰지 않는다 —
+    radiokorea(/community/jobs.php) 나 ppomppu(/zboard/zboard.php?id=guin) 처럼
+    /bbs/board.php?bo_table= 표준에서 벗어난 변종을 gnuboard 로 오분류하는 경우에도
+    사용자가 `add <URL>` 로 명시한 URL 이 그대로 보존돼야 하기 때문이다.
+
+    heuristic 결과(c.config)는 HTML 구조 정보(selectors, parse_mode, theme)와
+    base_url 폴백에만 사용.
     """
+    parsed = urlparse(url)
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    list_params = {k: v for k, v in query_pairs if k.lower() != "page"}
+    list_url = urlunparse(parsed._replace(query=""))
+
     c = result.config
-    base_url = c.get("base_url", "")
     return {
-        "list_url": f"{base_url}/bbs/board.php",
-        "list_params": {"bo_table": c.get("board_table", "")},
-        "base_url": base_url,
+        "list_url": list_url,
+        "list_params": list_params,
+        "base_url": c.get("base_url") or f"{parsed.scheme}://{parsed.netloc}",
         "selectors": c.get("selectors") or {},
         "parse_mode": c.get("parse_mode", "direct"),
         "skip_row_if_has_class": ["fz_list_th", "na-table-head"],
-        "external_id_from_url_param": "wr_id",
+        # heuristic 이 상세링크에서 자동감지한 값 우선, 못 찾았으면 gnuboard 표준 'wr_id'
+        "external_id_from_url_param": c.get("external_id_from_url_param") or "wr_id",
         "theme": c.get("theme", ""),  # 진단용 (크롤러는 안 씀)
     }
 

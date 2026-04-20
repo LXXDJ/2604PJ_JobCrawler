@@ -278,9 +278,9 @@
     "extraction_method": "dom",
     "requires_render": false,
     "source": {
-      "list_url": "https://www.ppomppu.co.kr/bbs/board.php",
+      "list_url": "https://www.ppomppu.co.kr/zboard/zboard.php",
       "list_params": {
-        "bo_table": "guin"
+        "id": "guin"
       },
       "base_url": "https://www.ppomppu.co.kr",
       "selectors": {
@@ -296,8 +296,8 @@
         "fz_list_th",
         "na-table-head"
       ],
-      "external_id_from_url_param": "wr_id",
-      "theme": "custom"
+      "external_id_from_url_param": "no",
+      "theme": "zboard"
     },
     "pagination": {
       "type": "url_param",
@@ -375,11 +375,9 @@
     "extraction_method": "dom",
     "requires_render": false,
     "source": {
-      "list_url": "/bbs/board.php",
-      "list_params": {
-        "bo_table": ""
-      },
-      "base_url": "",
+      "list_url": "https://www.radiokorea.com/community/jobs.php",
+      "list_params": {},
+      "base_url": "https://www.radiokorea.com",
       "selectors": {
         "list_rows": ".pp-list > li",
         "subject_link": "a > div.info > h1",
@@ -393,8 +391,8 @@
         "fz_list_th",
         "na-table-head"
       ],
-      "external_id_from_url_param": "wr_id",
-      "theme": "unknown"
+      "external_id_from_url_param": "id",
+      "theme": "radiokorea"
     },
     "pagination": {
       "type": "url_param",
