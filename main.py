@@ -74,6 +74,14 @@ LLM_MODEL = "gpt-4o-mini"
 # False: SPA 는 그대로 거부 (사람이 개발자도구로 API 찾아서 hardcoded_crawls.py 에 등록)
 USE_PLAYWRIGHT_DISCOVERY = True
 
+# -- Playwright 렌더 경로 (embedded JSON Phase 2.5) --
+# True : HTML 에 #__NEXT_DATA__ 가 없는 경우, 페이지를 실제 렌더해서
+#        window.__NUXT__ / window.__NEXT_DATA__ 같은 전역 변수에서 state 를 뽑는다.
+#        → JobKorea 같은 __NUXT__ 팩토리 / CSR 사이트 대응.
+#        등록된 사이트는 크롤링 시에도 매 페이지 렌더 필요 (비용 ↑).
+# False: HTML-only 만 시도 (빠르지만 factory form 은 실패)
+USE_PLAYWRIGHT_RENDER = True
+
 # -- Playwright API 후보 LLM 랭커 --
 # True : 규칙 점수화 상위 10개를 LLM 에게 넘겨 "진짜 공고 리스트 API" 를 재선별.
 #        메타데이터/필터옵션 API 를 걸러내는 데 효과적.
@@ -163,6 +171,7 @@ def cmd_analyze(url: str):
                 use_llm=USE_LLM,
                 llm_api_key=LLM_API_KEY,
                 llm_model=LLM_MODEL,
+                use_playwright_render=USE_PLAYWRIGHT_RENDER,
             ),
             LLMStrategy(
                 enabled=USE_LLM,
@@ -236,6 +245,7 @@ def cmd_add(url: str):
                 use_llm=USE_LLM,
                 llm_api_key=LLM_API_KEY,
                 llm_model=LLM_MODEL,
+                use_playwright_render=USE_PLAYWRIGHT_RENDER,
             ),
             LLMStrategy(enabled=USE_LLM, api_key=LLM_API_KEY, model=LLM_MODEL),
         ],
@@ -327,7 +337,8 @@ def cmd_add(url: str):
     if method == "dom":
         report = validate_dom_config(html, new_config)
     elif method == "embedded_json":
-        report = validate_embedded_json_config(html, new_config)
+        # 렌더 경로는 url 필요 (html 은 무시됨)
+        report = validate_embedded_json_config(html, new_config, url=url)
     else:
         print(f"\n[거부] extraction_method={method!r} 에 대한 validator 없음")
         return

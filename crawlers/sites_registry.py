@@ -183,7 +183,8 @@ def _embedded_json_analysis_to_source(result, url: str) -> dict:
     """embedded_json 분석 결과 → source 블록.
 
     analyzer 가 내는 flat config (EmbeddedJSONStrategy):
-        {platform, base_url, script_selector, item_path, ...}
+        HTML 경로: {platform, base_url, script_selector, item_path, ...}
+        렌더 경로: {platform, base_url, requires_render=True, state_source, item_path, ...}
     """
     parsed = urlparse(url)
     query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
@@ -191,13 +192,17 @@ def _embedded_json_analysis_to_source(result, url: str) -> dict:
     list_url = urlunparse(parsed._replace(query=""))
 
     c = result.config
-    return {
+    source = {
         "list_url": list_url,
         "list_params": list_params,
         "base_url": c.get("base_url") or f"{parsed.scheme}://{parsed.netloc}",
-        "script_selector": c.get("script_selector", "script#__NEXT_DATA__"),
         "item_path": c.get("item_path", ""),
     }
+    if c.get("requires_render"):
+        source["state_source"] = c.get("state_source", "window.__NUXT__")
+    else:
+        source["script_selector"] = c.get("script_selector", "script#__NEXT_DATA__")
+    return source
 
 
 def _static_html_analysis_to_source(result, url: str) -> dict:
@@ -267,9 +272,11 @@ def analysis_to_new_schema_config(result, url: str) -> dict:
             f"method={method!r} 변환 분기 없음 (분석만 되고 config 변환 미구현)"
         )
 
+    requires_render = bool(result.config.get("requires_render"))
+
     return {
         "extraction_method": method,
-        "requires_render": False,
+        "requires_render": requires_render,
         "source": source,
         "pagination": {"type": "url_param", "param": "page", "start": 1},
     }
@@ -327,8 +334,15 @@ def can_register(analysis_result) -> tuple[bool, str]:
         if not selectors.get("list_rows") or not selectors.get("subject_link"):
             return False, "selectors.list_rows / subject_link 비어있음 (필수)"
     elif method == "embedded_json":
-        if not config.get("script_selector"):
-            return False, "script_selector 비어있음 (필수)"
+        if config.get("requires_render"):
+            if not config.get("state_source"):
+                return False, (
+                    "requires_render=True 지만 state_source 비어있음 "
+                    "(렌더 결과 window.* 어떤 전역도 유효하지 않음)"
+                )
+        else:
+            if not config.get("script_selector"):
+                return False, "script_selector 비어있음 (필수)"
         if not config.get("item_path"):
             return False, "item_path 비어있음 — embedded state 안 배열 경로를 찾지 못했음"
 

@@ -192,15 +192,32 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
 
         llm_selected_index: Optional[int] = None
         llm_reason = ""
+        llm_explicit_reject = False
         if self.use_llm_ranker and self.llm_api_key and len(pool) > 0:
             llm_selected_index, llm_reason = self._llm_rank(pool)
+            if llm_selected_index == -1:
+                # LLM 이 "전부 메타데이터/트래킹" 명시 판정 — 규칙점수 폴백 금지.
+                # 환각 방어: 후보가 명백히 공고 API 아닌데도 score 로 억지 선택하는 사고 방지.
+                llm_explicit_reject = True
+
+        if llm_explicit_reject:
+            return AnalysisResult(
+                url=url,
+                site_type=SiteType.UNKNOWN,
+                confidence=0.0,
+                strategy_name=self.name,
+                notes=(
+                    f"{len(captured)}개 JSON 응답 캡처 / {len(filtered)}개 score 통과했으나 "
+                    f"LLM 판정: 모두 메타데이터/트래킹 — {llm_reason}"
+                ),
+            )
 
         if llm_selected_index is not None and 0 <= llm_selected_index < len(pool):
             best = pool[llm_selected_index]
             best_score = best["score"]
             selection_source = f"llm (idx={llm_selected_index})"
         else:
-            # LLM 미사용 / 실패 / -1 반환 시 → 규칙점수 1위
+            # LLM 미사용 / 호출 실패 / 파싱 실패 → 규칙점수 1위
             best = pool[0]
             best_score = best["score"]
             selection_source = "rule_score"
@@ -254,8 +271,10 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
         """
         LLM 에게 후보 풀을 보여주고 진짜 공고 API index 를 선택받는다.
 
-        Returns: (선택된 index | None, reason 문자열)
-        실패하면 (None, 에러설명) — 호출부에서 규칙점수 1위로 폴백한다.
+        Returns: (index, reason) 세 가지 의미:
+            - (0..len-1, reason) : LLM 이 후보 중 하나 선택 → 그대로 사용
+            - (-1, reason)       : LLM 이 "적절한 공고 API 없음" 명시 → 폴백 금지
+            - (None, reason)     : LLM 호출/파싱 실패 → 규칙점수 폴백 허용
         """
         try:
             from openai import OpenAI
@@ -285,9 +304,9 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
 
         reason = str(parsed.get("reason", ""))[:300]
 
-        # -1 이면 "적절한 후보 없음" → 폴백
+        # -1 이면 "적절한 후보 없음" — 명시 거부 sentinel (호출부가 별도 처리)
         if idx < 0:
-            return None, f"LLM: 적절한 공고 API 없음 — {reason}"
+            return -1, f"LLM: 적절한 공고 API 없음 — {reason}"
 
         if idx >= len(pool):
             return None, f"LLM: 범위 초과 index={idx} (pool={len(pool)}) — {reason}"

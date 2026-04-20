@@ -220,51 +220,93 @@ EMBEDDED_TITLE_KEYS = [
 ]
 
 
-def validate_embedded_json_config(html: str, config: dict) -> ValidationReport:
+def validate_embedded_json_config(
+    html: str,
+    config: dict,
+    url: Optional[str] = None,
+) -> ValidationReport:
     """
-    HTML 내 <script> 에서 state JSON 을 뽑고, item_path 로 배열에 도달해서
-    실제로 공고성 데이터가 있는지 확인한다.
+    config 가 실제로 공고성 데이터를 추출할 수 있는지 확인.
+
+    HTML 경로 (config.requires_render=False): 주어진 html 에서 script 태그 파싱
+    렌더 경로 (config.requires_render=True):  url 로 Playwright 렌더 → page.evaluate
 
     기대하는 config 모양:
         {
+            "requires_render": false | true,
             "source": {
+                # requires_render=false
                 "script_selector": "script#__NEXT_DATA__",
+                # requires_render=true
+                "list_url": "...", "list_params": {...}, "state_source": "window.__NUXT__",
+                "wait_for_ms": 4000,      # 선택
                 "item_path": "props.pageProps.jobs",
             }
         }
 
     통과 조건:
-        1. script_selector 로 <script> 발견
-        2. 내부 문자열이 유효 JSON 으로 파싱됨
+        1. state 획득 (script 또는 렌더)
+        2. 내부가 유효 구조 (dict/list) 로 파싱됨
         3. item_path 로 도달한 값이 list 이고 길이 >= MIN_LIST_ROWS
         4. 아이템 중 MIN_TITLE_MATCH_RATIO 이상이 제목성 필드를 가짐
     """
     source = config.get("source") or {}
-    script_selector = source.get("script_selector")
     item_path = source.get("item_path", "")
+    requires_render = bool(config.get("requires_render"))
 
-    if not script_selector:
-        return ValidationReport(ok=False, reason="source.script_selector 가 비어있음")
+    if requires_render:
+        if not url:
+            return ValidationReport(
+                ok=False,
+                reason="requires_render=True 지만 validator 에 url 미제공",
+            )
+        state_source = source.get("state_source")
+        if not state_source:
+            return ValidationReport(
+                ok=False,
+                reason="requires_render=True 지만 source.state_source 비어있음",
+            )
+        try:
+            state = _fetch_state_via_render(url, source)
+        except Exception as e:
+            return ValidationReport(
+                ok=False,
+                reason=f"렌더 state 추출 실패: {type(e).__name__}: {e}",
+            )
+        if state is None:
+            return ValidationReport(
+                ok=False,
+                reason=f"page.evaluate({state_source!r}) 결과 None",
+            )
+        if not isinstance(state, (dict, list)):
+            return ValidationReport(
+                ok=False,
+                reason=f"state 타입이 dict/list 아님 (type={type(state).__name__})",
+            )
+    else:
+        script_selector = source.get("script_selector")
+        if not script_selector:
+            return ValidationReport(ok=False, reason="source.script_selector 가 비어있음")
 
-    try:
-        soup = BeautifulSoup(html, "lxml")
-    except Exception as e:
-        return ValidationReport(ok=False, reason=f"HTML 파싱 실패: {type(e).__name__}: {e}")
+        try:
+            soup = BeautifulSoup(html, "lxml")
+        except Exception as e:
+            return ValidationReport(ok=False, reason=f"HTML 파싱 실패: {type(e).__name__}: {e}")
 
-    tag = soup.select_one(script_selector)
-    if not tag or not tag.string:
-        return ValidationReport(
-            ok=False,
-            reason=f"script_selector {script_selector!r} 으로 스크립트/내용 없음",
-        )
+        tag = soup.select_one(script_selector)
+        if not tag or not tag.string:
+            return ValidationReport(
+                ok=False,
+                reason=f"script_selector {script_selector!r} 으로 스크립트/내용 없음",
+            )
 
-    try:
-        state = json.loads(tag.string.strip())
-    except json.JSONDecodeError as e:
-        return ValidationReport(
-            ok=False,
-            reason=f"스크립트 내용 JSON 파싱 실패: {e}",
-        )
+        try:
+            state = json.loads(tag.string.strip())
+        except json.JSONDecodeError as e:
+            return ValidationReport(
+                ok=False,
+                reason=f"스크립트 내용 JSON 파싱 실패: {e}",
+            )
 
     items = _traverse_path(state, item_path)
     if items is None:
@@ -346,6 +388,47 @@ def _traverse_path(state: Any, path: str) -> Any:
         else:
             return None
     return cur
+
+
+VALIDATOR_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+VALIDATOR_RENDER_NAV_TIMEOUT_MS = 30_000
+VALIDATOR_RENDER_WAIT_MS_DEFAULT = 4000
+
+
+def _fetch_state_via_render(url: str, source: dict) -> Any:
+    """
+    Playwright 로 url 열고 source.state_source 평가해 state 반환.
+    embedded_crawler._extract_state_via_render 와 거의 동일하지만,
+    validator 는 cmd_add 시점이라 list_url/params 재조립 없이 url 그대로 씀.
+    """
+    from playwright.sync_api import sync_playwright
+
+    state_source = source["state_source"]
+    wait_ms = int(source.get("wait_for_ms") or VALIDATOR_RENDER_WAIT_MS_DEFAULT)
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(
+                user_agent=VALIDATOR_USER_AGENT,
+                ignore_https_errors=True,
+            )
+            page = context.new_page()
+            try:
+                page.goto(
+                    url,
+                    wait_until="load",
+                    timeout=VALIDATOR_RENDER_NAV_TIMEOUT_MS,
+                )
+            except Exception:
+                pass
+            page.wait_for_timeout(wait_ms)
+            return page.evaluate(f"() => {state_source}")
+        finally:
+            browser.close()
 
 
 def _pick_title(item: dict) -> str:

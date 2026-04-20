@@ -45,42 +45,43 @@
 
 ```json
 {
-  "site_id": "jobkorea-cambodia",
-  "url": "https://www.jobkorea.co.kr/Search/?stext=...",
-  "added_at": "2026-04-20T...",
+  "site_id": "hanin",
+  "url": "http://www.hanin.or.kr/bbs/board.php?bo_table=Information",
+  "added_at": "2026-04-17T...",
 
-  "site_type": "nuxt_ssr",              // 분류 (진단/통계용)
+  "site_type": "gnuboard",              // 분류 (진단/통계용)
 
-  "extraction_method": "embedded_json",  // 추출 로직 선택 (3종 중 1)
-  "requires_render": true,               // Playwright 로 HTML 받을지
+  "extraction_method": "dom",            // 추출 로직 선택 (3종 중 1)
+  "requires_render": false,              // Playwright 로 렌더 필요한지
 
   "source": {
-    // extraction_method 에 따라 스키마 다름.
-    // dom:           {"selectors": {...}, "base_url": "..."}
-    // api:           {"endpoint": "...", "method": "GET", "headers": {...}, "item_path": "data.result"}
-    // embedded_json: {"script_selector": "#__NEXT_DATA__", "item_path": "props.pageProps.jobs"}
-  },
-
-  "field_mapping": {
-    // 수집한 raw 아이템 → DB 스키마 매핑
-    "title": "$.title",
-    "company": "$.employer.company",
-    "url": "https://...{$.id}",
-    "posted_at": "$.pubdate"
+    // extraction_method 에 따라 스키마 다름. 현재 구현:
+    //
+    // dom:
+    //   {"list_url", "list_params", "base_url", "selectors": {...}, "parse_mode",
+    //    "skip_row_if_has_class": [...], "external_id_from_url_param"}
+    //
+    // embedded_json (requires_render=false):
+    //   {"list_url", "list_params", "base_url", "script_selector", "item_path"}
+    //
+    // embedded_json (requires_render=true, Phase 2.5):
+    //   {"list_url", "list_params", "base_url", "state_source", "item_path",
+    //    "wait_for_ms"}   // state_source 예: "window.__NUXT__", "window.__NEXT_DATA__"
+    //
+    // api:  (Phase 3 미구현)
   },
 
   "pagination": {
     "type": "url_param",           // url_param | api_param | dom_next_link | infinite_scroll | none
     "param": "page",
-    "start": 1,
-    "stop_when": "no_new_items"    // no_new_items | max_pages | empty_response
+    "start": 1
   },
 
   "validated": true,
   "validation_report": {
-    "items_extracted": 53,
-    "fields_matched": {"title": 53, "company": 50, "url": 53},
-    "sample_titles": ["미얀마, 캄보디아 통번역상담사 모집", "..."]
+    "items_extracted": 14,
+    "fields_matched": {"title": 14},
+    "sample_titles": ["...", "...", "..."]
   }
 }
 ```
@@ -88,90 +89,119 @@
 **키 결정의 이유:**
 
 - `extraction_method` 는 크롤러 선택의 **유일한 축**. dispatcher 가 이것만 보고 분기.
-- `requires_render` 는 추출 방법과 직교. DOM 이어도 렌더 필요할 수 있음 (잡코리아가 DOM 으로 풀린 경우).
+- `requires_render` 는 추출 방법과 직교. embedded_json 이어도 렌더 필요할 수 있음 (`__NUXT__` 팩토리 형태 — Phase 2.5).
 - `source` 스키마를 method 별로 분리 — 하나로 통합하면 의미 없는 필드가 엔트리를 오염시킴.
-- `field_mapping` 은 JSONPath 같은 단순 표현식. DOM 의 경우 `$.title` 대신 `{"selector": ".title", "attr": "text"}` 같은 객체 형태 허용 (확장).
+- **렌더 경로의 `state_source`** 는 JavaScript expression (`window.__NUXT__` 등). crawler 가 `page.evaluate()` 로 평가해 state 추출.
 - `validated=true` 없으면 sites.json 에 **절대 저장 안 함**. 이게 환각 방어선.
+- `field_mapping` 은 현재 구현 안 됨 — 각 크롤러가 내장된 휴리스틱 키 리스트 (TITLE_KEYS, COMPANY_KEYS 등) 로 필드 자동 추출. 장기적으로 JSONPath 표현식 도입 예정.
 
 ---
 
 ## 4. 파이프라인
 
-### 4.1 Analyzer (등록 시점)
+### 4.1 Analyzer (등록 시점) — 현재 구현
 
 ```
 URL
  ↓
-[Fetcher]
-    HTTP fetch (requests) OR Playwright render → html, page_obj
+[HeuristicStrategy]
+    HTTP fetch + 시그니처 매칭 (__NUXT__, __NEXT__, g5_bbs_url, generator meta 등)
+    → site_type (gnuboard/static_html/spa_*) + confidence
+    → SPA 판정이면 heuristic_type 기억해두고 다음 전략으로 체인
  ↓
-[Classifier]
-    heuristic 시그니처 (__NUXT__, g5_bbs_url 등) + 필요 시 LLM 보정
-    → site_type 결정, requires_render 힌트
+[PlaywrightDiscoveryStrategy]  — heuristic_type ∈ SPA_TYPES 일 때만 실행
+    headless Chromium 으로 XHR 캡처 → URL/페이로드 규칙 점수화
+    LLM 랭커가 메타데이터/트래킹 걸러내고 진짜 공고 API 선택
+    LLM 명시 거부 (-1) 시 → 규칙점수 폴백 금지, UNKNOWN 반환 (환각 방어)
+    성공 시 site_type=api_discovered
  ↓
-[Extractors]  (순차 시도, 첫 validator 통과 시 종료)
-    1. APIDiscoveryExtractor       (Playwright XHR 캡처 + LLM 랭커)  ← 이미 구현됨
-    2. EmbeddedJSONExtractor       (HTML <script> 에서 상태 JSON 찾기)
-    3. DOMSelectorExtractor        (LLM 에게 HTML 주고 selectors 질문)
+[EmbeddedJSONStrategy]  — heuristic_type ∈ SPA_TYPES + playwright 실패 시
+    1차: HTML 에서 <script id="__NEXT_DATA__"> 찾아 innerText JSON 파싱
+    2차 (Phase 2.5): use_playwright_render=True 면 페이지 렌더 후
+         page.evaluate("() => window.__NEXT_DATA__ / __NUXT__ / __INITIAL_STATE__ /
+                           __APOLLO_STATE__") 로 전역 state 추출
+    state 내 배열 후보 수집 → LLM 이 공고 리스트 경로 선택
+    LLM 명시 거부 ("") 시 → 휴리스틱 폴백 금지 (환각 방어)
+    성공 시 site_type=embedded_json_discovered (+ requires_render 마킹)
  ↓
-[Validator]
-    추출 방법별로 실제 돌려보고 ≥ N개 나오는지 확인
-    통과 → 등록 / 실패 → 다음 Extractor
-    모두 실패 → "수동 필요" 로 거부 (사람에게 정직한 실패)
+[LLMStrategy]  — heuristic 미확정 (static_html 등) 일 때만, SPA 엔 스킵
+    HTML 주고 gnuboard/static_html/… 분류 + selectors 제안
+ ↓
+[cmd_add: Validator]
+    extraction_method 별 validator 실제 돌려봄:
+      - validate_dom_config(html, config)
+      - validate_embedded_json_config(html, config, url=...)
+        ← requires_render=True 면 내부에서 Playwright 렌더 후 검증
+    통과 실패 → 저장 거부 (침묵 실패 방지)
  ↓
 [Registrar]
-    sites.json 에 엔트리 저장 (validated=true)
+    sites.json 에 엔트리 저장 (validated=true + validation_report)
 ```
 
 ### 4.2 Crawler (수집 시점)
 
 ```
-for entry in sites.json + REGISTERED_CRAWLS:
-    dispatcher.pick(entry.extraction_method)
-        ├─ "dom"           → DOMCrawler
-        ├─ "api"           → APICrawler
-        └─ "embedded_json" → EmbeddedJSONCrawler
+for entry in REGISTERED_CRAWLS + sites.json:
+    dispatcher.dispatch(entry)
+      ├─ extraction_method == "dom"           → dom_crawler.crawl(...)
+      ├─ extraction_method == "api"           → NotImplementedError (Phase 3)
+      ├─ extraction_method == "embedded_json" → embedded_crawler.crawl(...)
+      │     ├─ requires_render=False → requests fetch + <script> 파싱
+      │     └─ requires_render=True  → 페이지별 Playwright 렌더 + page.evaluate
+      └─ 레거시 crawler="camhr_crawler" / "gnuboard_crawler" → 해당 모듈
     ↓
-    각 크롤러 공통:
-      - Fetcher (requires_render 보고 HTTP vs Playwright)
-      - Paginator (pagination config 따라 루프)
-      - field_mapping 적용해서 normalized item 생성
-      - 아이템 건별 ItemValidator (필수 필드 non-empty 확인)
-      - JobDatabase 에 upsert
+    각 크롤러:
+      - Paginator: pagination.type (url_param 만 현재 지원)
+      - 아이템별 field 휴리스틱 (TITLE_KEYS, URL_KEYS, ...) 로 매핑
+      - JobDatabase.upsert_job
+      - CrawlRun 시작/종료 기록
     ↓
-    RunReport (성공/실패/수집량) → healthcheck 연동
+    cmd_crawl 종료 후 healthcheck.analyze() 자동 실행 → Slack 선택적 전송
 ```
 
 ---
 
-## 5. 모듈 레이아웃 (목표)
+## 5. 모듈 레이아웃
+
+### 5.1 현재 구조 (Phase 2.5 시점)
 
 ```
 crawlers/
 ├── analyzer/
-│   ├── models.py              # AnalysisResult, SiteType, ExtractionMethod enum
-│   ├── fetcher.py             # 공용 HTTP + Playwright render
-│   ├── classifier.py          # heuristic + LLM 하이브리드 (현 HeuristicStrategy 대체)
-│   ├── validator.py           # ★ 핵심. DOM/API/EmbeddedJSON 각각 검증
-│   ├── pipeline.py            # 오케스트레이션 (현 analyzer.py 대체)
-│   └── extractors/
-│       ├── base.py            # Extractor ABC
-│       ├── api_discovery.py   # 현 playwright_discovery 이동
-│       ├── embedded_json.py   # NEW
-│       └── dom_selectors.py   # NEW
+│   ├── __init__.py
+│   ├── analyzer.py              # SiteAnalyzer 오케스트레이터 (전략 순차 실행)
+│   ├── models.py                # AnalysisResult, SiteType enum
+│   ├── validator.py             # validate_dom_config / validate_embedded_json_config
+│   │                            # (+ validate_api_config stub)
+│   └── strategies/
+│       ├── __init__.py
+│       ├── base.py              # AnalysisStrategy ABC
+│       ├── heuristic.py         # 시그니처 매칭 + site_type 분류
+│       ├── playwright_discovery.py  # XHR 캡처 + LLM 랭커 (API 자동 발견)
+│       ├── embedded_json.py     # HTML <script> 파싱 + Playwright 렌더 (Phase 2.5)
+│       └── llm.py               # LLM 폴백 — gnuboard/static_html/spa selectors
 │
-├── crawler/
-│   ├── dispatcher.py          # extraction_method → 크롤러 인스턴스
-│   ├── dom_crawler.py         # NEW (gnuboard/static_html/rendered_html 통합)
-│   ├── api_crawler.py         # NEW (camhr 일반화)
-│   └── embedded_crawler.py    # NEW
-│
-├── pagination.py              # NEW. Paginator ABC + 4가지 구현
-├── field_mapping.py           # NEW. JSONPath / DOM selector 추출기
-├── sites_registry.py          # validated=true 체크로 로직 바뀜
-├── database.py                # (기존 유지)
-└── hardcoded_crawls.py        # 최종 삭제 대상 (모든 사이트가 sites.json 로 이주)
+├── dispatcher.py                # extraction_method 로 크롤러 모듈 선택
+├── dom_crawler.py               # gnuboard/static_html 통합 DOM 크롤러
+├── embedded_crawler.py          # embedded_json 크롤러 (HTML + 렌더 경로)
+├── camhr_crawler.py             # 레거시 (Phase 3 에서 api_crawler 로 이주 예정)
+├── gnuboard_crawler.py          # 레거시 (dom_crawler 완성 후 삭제 예정)
+├── hardcoded_crawls.py          # REGISTERED_CRAWLS — analyzer 로 자동화 불가 사이트용
+├── sites_registry.py            # sites.json I/O + analysis → config 변환 + can_register
+├── database.py                  # JobDatabase
+├── http_client.py               # requests + 재시도
+├── healthcheck.py               # 수집 결과 분석
+└── slack_notifier.py            # Slack 알림
 ```
+
+### 5.2 목표 구조 (리팩터 완료 시)
+
+- `analyzer/strategies/` → `analyzer/extractors/` 로 개명 (역할이 classifier vs extractor 로 분화되면)
+- `crawler/` 서브디렉토리로 크롤러들 이동 + `api_crawler.py` 신규
+- `pagination.py` + `field_mapping.py` 모듈로 로직 분리
+- `hardcoded_crawls.py` 삭제 — 모든 사이트가 sites.json 로 이주
+
+**현재 도달도**: analyzer 분리 ✓, validator 분리 ✓, dom/embedded 크롤러 ✓. 남은 건 api_crawler + 레거시 이주 + 구조적 분리.
 
 ---
 
@@ -195,12 +225,23 @@ crawlers/
 2. `source.item_path` (JSONPath) 로 꺼낸 값이 배열이고 길이 ≥ **2**
 3. 배열 첫 아이템이 텍스트성 필드를 ≥ **1개** 가짐 (title/company/name 등 공고 필드 후보)
 
-### 6.3 Embedded JSON config 검증 (`validate_embedded_json(html, config)`)
+### 6.3 Embedded JSON config 검증 (`validate_embedded_json_config(html, config, url)`)
 
-통과 조건:
+두 경로 분기:
+
+**HTML 경로** (`requires_render=False`):
 1. `source.script_selector` 로 `<script>` 찾기 성공
 2. 내부 JSON 파싱 성공
-3. `source.item_path` 로 꺼낸 값이 배열 ≥ **2** + 아이템이 텍스트성 필드 보유
+3. `source.item_path` 로 꺼낸 값이 배열 ≥ **2** + 아이템이 `EMBEDDED_TITLE_KEYS`
+   (title/jobTitle/postSubject/...) 중 하나를 비율 ≥ **50%** 로 보유
+
+**렌더 경로** (`requires_render=True`, Phase 2.5):
+1. Playwright 로 url 열고 `source.state_source` (예: `window.__NUXT__`) 를
+   `page.evaluate()` 로 평가 → state 획득
+2. state 가 dict/list 이어야 함
+3. 이하 3번은 HTML 경로와 동일 (item_path + 제목성 필드)
+
++ 공통: 추출된 제목이 UI 노이즈 키워드 (로그인/홈/검색 등) 뿐이면 거부.
 
 ### 6.4 공통: 수집 시점 ItemValidator
 
@@ -212,79 +253,117 @@ crawlers/
 
 ## 7. 현재 → 목표 매핑
 
-| 현재 | 목표 | 비고 |
+| 항목 | 현재 상태 | 비고 |
 |---|---|---|
-| `strategies/heuristic.py` | `classifier.py` | 역할 좁혀짐 (site_type 분류만) |
-| `strategies/llm.py` | `extractors/dom_selectors.py` 로 재배치 | LLM 호출 패턴 유지, validator 가 앞단 |
-| `strategies/playwright_discovery.py` | `extractors/api_discovery.py` 로 이동 | 기능 그대로 |
-| (없음) | `extractors/embedded_json.py` | NEW — 잡코리아 같은 SSR 대응 |
-| (없음) | `validator.py` | NEW — 환각 방어 |
-| `gnuboard_crawler.py` | `crawler/dom_crawler.py` 의 preset | theme (nariya/fz) 는 selectors 사전으로 흡수 |
-| `camhr_crawler.py` | `crawler/api_crawler.py` + sites.json 엔트리 | hardcoded_crawls 에서 이주 |
-| `hardcoded_crawls.py` | 삭제 | 모든 사이트가 sites.json 로 |
-| `SITE_TYPE_TO_CRAWLER` | `EXTRACTION_METHOD_TO_CRAWLER` | 축 변경 |
+| `SITE_TYPE_TO_CRAWLER` → `EXTRACTION_METHOD_TO_CRAWLER` | ✓ 완료 (Phase 1) | dispatcher 가 method 기준 분기 |
+| `validator.py` (DOM/EmbeddedJSON) | ✓ 완료 (Phase 1 + 2 + 2.5) | API 는 stub |
+| `dom_crawler.py` | ✓ 완료 (Phase 1) | gnuboard/static_html 통합 |
+| `embedded_crawler.py` | ✓ 완료 (Phase 2) + 렌더 경로 (Phase 2.5) | |
+| `strategies/embedded_json.py` | ✓ 완료 (Phase 2) + 렌더 폴백 (Phase 2.5) | `__NUXT__` 팩토리 대응 |
+| `strategies/playwright_discovery.py` LLM 명시 거부 존중 | ✓ 완료 (Phase 2.5) | 환각 방어 — 규칙점수 폴백 금지 |
+| `strategies/` → `extractors/` 디렉토리 개명 | 미완 | 이름 충돌 없고 영향 크지 않아 후순위 |
+| `api_crawler.py` | 미완 (Phase 3) | camhr 일반화 대상 |
+| `camhr_crawler.py` → sites.json 이주 | 미완 (Phase 3) | |
+| `hardcoded_crawls.py` 삭제 | 미완 (Phase 3 이후) | 전체 이주 전까진 유지 |
+| `field_mapping` JSONPath 표현식 | 미완 | 현재는 크롤러 내장 휴리스틱 키 리스트로 대체 |
 
 ---
 
-## 8. 케이스 시뮬레이션
+## 8. 케이스 시뮬레이션 (실측 포함)
 
-설계가 4가지 실제 사이트를 커버하는지 점검.
+### hanin (gnuboard) — ✓ 정상 수집
+1. Heuristic → `gnuboard` (시그니처 g5_bbs_url + bo_table 파라미터)
+2. confidence=0.90, 바로 반환 — playwright/embedded/llm 스킵
+3. theme=nariya 매칭 → selectors 자동 생성 (list_rows / subject_link)
+4. validator: list_rows 14개, title 14/14 → 통과
+5. crawler: `dom_crawler` + pagination.type=url_param
 
-### CamHR (API, 정상)
-1. Classifier → spa_custom
-2. APIDiscoveryExtractor → LLM 랭커가 `jobs/simple/page-query` 선택
-3. Validator → 호출 시 `data.result` 배열 12개, title/employer 필드 존재 → 통과
-4. Crawler: `api_crawler` + `pagination.type=api_param` + field_mapping
+### siemreap (gnuboard, 캄보디아 게시판) — ✓ 정상 수집
+hanin 과 동일 경로, 8건 수집.
 
-### 잡코리아 캄보디아 (SSR + DOM 후행)
-1. Classifier → nuxt_ssr
-2. APIDiscoveryExtractor → 후보 전부 메타데이터, LLM 이 -1 → **실패**
-3. EmbeddedJSONExtractor → HTML 에서 `__NUXT__` 파싱, LLM 이 `state.result.list` 같은 경로 제안
-4. Validator → state 파싱 성공, 배열 50+ 개, title 필드 존재 → 통과 (또는 여기서도 실패 시 DOMSelectorExtractor 로 폴백)
-5. Crawler: `embedded_crawler` + pagination
+### CamHR (API, 현재 하드코딩) — ⏳ Phase 3
+현재는 `hardcoded_crawls.py` 의 레거시 어댑터로 수집 중. Phase 3 에서:
+1. Heuristic → spa_custom
+2. PlaywrightDiscoveryStrategy → LLM 랭커가 `jobs/simple/page-query` 선택
+3. Validator (`validate_api_config`) → `data.result` 배열 확인
+4. Crawler: 신규 `api_crawler`
 
-### 인크루트 (공고 0건)
-1. Classifier → spa_or_hybrid
-2. APIDiscoveryExtractor → 후보 없음 (XHR 에 listing 없음)
-3. EmbeddedJSONExtractor → state 없음
-4. DOMSelectorExtractor → LLM 이 selectors 제안 → **Validator 에서 매칭 0개 → 실패**
-5. 모두 실패 → "수동 필요" 거부. 정직한 실패.
+### Wanted (Next.js SSR, 메타만 있음) — ✓ 정직한 실패
+1. Heuristic → spa_next
+2. PlaywrightDiscoveryStrategy → 후보 캡처되지만 메타데이터뿐, LLM=-1 → UNKNOWN
+3. EmbeddedJSONStrategy → `#__NEXT_DATA__` 파싱 OK, 배열 후보 10개 중 LLM 판정
+   "모두 카테고리/필터/광고" → **`""` 명시 거부**, 휴리스틱 폴백 금지
+4. 등록 거부. 정직한 실패. (공고 리스트가 initial state 에 없고 user 상호작용 후 XHR 로만 로드)
 
-### hanin (gnuboard)
-1. Classifier → gnuboard (heuristic 강한 시그니처)
-2. DOMSelectorExtractor → theme 사전에서 nariya 매칭 시 selectors 바로 사용, 없으면 LLM
-3. Validator → list_rows 매칭, 제목 있음 → 통과
-4. Crawler: `dom_crawler`
+### JobKorea `/Search/` — ✗ Phase 2.5 범위 밖
+1. Heuristic → `spa_nuxt` (HTML 안 `__NUXT__` 문자열 오탐)
+2. PlaywrightDiscoveryStrategy → 16개 XHR 캡처, 전부 `codes/benefit` 등 메타 API,
+   LLM=-1 → UNKNOWN (환각 방어 적용 후 정상)
+3. EmbeddedJSONStrategy HTML 경로 → `#__NEXT_DATA__` 없음
+4. EmbeddedJSONStrategy 렌더 경로 (Phase 2.5) → `window.__NEXT_DATA__` /
+   `__NUXT__` / `__INITIAL_STATE__` / `__APOLLO_STATE__` **전부 없음** → UNKNOWN
+5. LLMStrategy → SPA 로 판정했으니 스킵
+6. 등록 거부. Phase 2.5 의 표준 state 패턴 밖. (JobKorea 는 custom XHR + 세션 기반)
+
+### JobKorea `/recruit/joblist` — ✗ 별개 병목
+실측 결과: HTML 에 `tr.devloopArea` 60개로 **공고가 SSR 렌더**됨. 원래 DOM
+크롤링으로 풀려야 하나:
+1. Heuristic 이 HTML 안 `__NUXT__` 문자열 (공용 번들/트래킹) 에 낚여 `spa_nuxt` 오탐
+2. 그 결과 DOM selector 생성 경로 (LLMStrategy) 가 스킵됨
+3. 최종 config 는 `selectors: {}` → can_register 거부
+
+**Phase 2.6 해결 과제**:
+- Heuristic 의 `__NUXT__` 시그니처를 더 엄격하게 (단순 문자열 매칭 → DOM 구조 동반 확인)
+- 또는 LLMStrategy 가 SPA 판정이어도 DOM 에 공고가 보이면 selectors 생성 시도
 
 ---
 
 ## 9. Phase 로드맵
 
-### Phase 1: Validator + 범용 DOMCrawler
-- `analyzer/validator.py` 구현 (3종 스펙 다 쓰되 DOM 만 실제 사용)
-- `crawler/dom_crawler.py` 구현 (gnuboard_crawler 흡수)
+### Phase 1: Validator + 범용 DOMCrawler — ✓ 완료
+- `analyzer/validator.py` (DOM) + `dom_crawler.py` (gnuboard 흡수)
 - `SITE_TYPE_TO_CRAWLER` → `EXTRACTION_METHOD_TO_CRAWLER` 전환
-- 기존 gnuboard 엔트리들 field_mapping + pagination config 마이그레이션
-- 회귀 테스트: hanin/siemreap 동일 데이터 수집 확인
+- 회귀 확인: hanin 14건, siemreap 8건
 
-### Phase 2: EmbeddedJSON 추출 + Extractor 재배치
-- `strategies/` → `extractors/` 이동 + base ABC 정리
-- `extractors/embedded_json.py` + `crawler/embedded_crawler.py`
-- 잡코리아 config 자동 생성 + 수집 검증
+### Phase 2: EmbeddedJSON 추출 — ✓ 완료
+- `strategies/embedded_json.py` (HTML `#__NEXT_DATA__` 파싱 + LLM 경로 선택)
+- `embedded_crawler.py` (requires_render=False 경로)
+- `validator.validate_embedded_json_config`
+- LLM 명시 거부 sentinel → 휴리스틱 폴백 금지 (환각 방어)
 
-### Phase 3: API 경로 일반화
-- `crawler/api_crawler.py` 구현
+### Phase 2.5: Playwright 렌더 경로 — ✓ 완료
+- EmbeddedJSONStrategy 에 렌더 폴백 (`window.__NUXT__` / `__NEXT_DATA__` /
+  `__INITIAL_STATE__` / `__APOLLO_STATE__` evaluate)
+- embedded_crawler 에 페이지별 렌더 경로
+- validator 렌더 경로 지원 (url 인자)
+- PlaywrightDiscoveryStrategy 도 LLM 명시 거부 존중 (환각 방어 통일)
+- 실측: JobKorea 는 표준 state 패턴 밖 → 정직한 실패. 다른 Nuxt 팩토리 /
+  CSR 사이트에는 유효.
+
+### Phase 2.6: JobKorea 트랙 (다음) — 미완
+- Heuristic `__NUXT__` / `__NEXT_DATA__` 오탐 수정 (DOM 구조 동반 확인)
+- LLMStrategy 가 SPA 판정이어도 DOM 에 공고가 보이면 selectors 생성 시도
+- JobKorea `/recruit/joblist` 가 DOM 경로로 풀리도록
+
+### Phase 3: API 경로 일반화 — 미완
+- `api_crawler.py` 구현 (camhr 일반화)
+- `validate_api_config` 실구현
 - camhr_crawler → sites.json 엔트리로 이주
-- hardcoded_crawls.py 삭제
+- hardcoded_crawls.py 축소/삭제
 
-### Phase 4: 대량 발굴 + 실측
+### Phase 4: 대량 발굴 + 실측 — 미완
 - 캄보디아 구인 사이트 50~100개 발굴
 - `analyze` 배치 스크립트
-- 성공률 / 실패 유형 분류 → 다음 개선 방향 결정
+- 성공률 / 실패 유형 분류
 
-### Phase 5 (선택): 인터랙션 캡처
-- 검색 버튼 클릭, 무한스크롤 유도 등 (`extractors/api_discovery.py` 확장)
-- Cloudflare 우회는 이 단계에서
+### Phase 5 (선택): 인터랙션 캡처 — 미완
+- 검색 버튼 클릭, 무한스크롤 유도 등
+- Cloudflare 우회
+
+### 구조 정리 (병렬) — 미완
+- `strategies/` → `extractors/` 개명
+- `crawler/` 서브디렉토리로 크롤러들 묶기
+- `pagination.py` / `field_mapping.py` 모듈 분리
 
 ---
 

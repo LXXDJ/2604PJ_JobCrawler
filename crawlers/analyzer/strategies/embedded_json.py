@@ -5,11 +5,17 @@ SSR (Next.js / Nuxt) 사이트는 JS 렌더링 전에 HTML <script> 태그 안�
 직렬화된 애플리케이션 상태를 심어둔다. 이 전략은 그 상태를 파싱해서
 "공고 리스트 배열" 로 통하는 경로를 찾아 config 로 내놓는다.
 
-Phase 2 범위:
-    - <script id="__NEXT_DATA__"> (Next.js, 순수 JSON) 지원
-    - window.__NUXT__=(factory function)(...) 형태는 Playwright 렌더 필요 → Phase 2.5 보류
+지원 경로:
+    1. HTML-only (저비용): <script id="__NEXT_DATA__"> 처럼 innerText 가 순수 JSON
+    2. Playwright 렌더 (use_playwright_render=True): 페이지 열고 window.__NEXT_DATA__ /
+       window.__NUXT__ 같은 전역 변수를 page.evaluate 로 추출.
+       → JobKorea 같이 `window.__NUXT__=(function(...){return {...}})(...)` 팩토리
+         함수 형태이거나 CSR 로 초기 상태를 동적 할당하는 사이트 대응.
+
+흐름: HTML 먼저 → 없으면 (use_playwright_render=True 인 경우) 렌더 폴백.
 
 검출 성공 시 SiteType.EMBEDDED_JSON_DISCOVERED + ExtractionMethod=embedded_json 로 분기.
+렌더 경로로 찾으면 config.requires_render=True 마킹 → crawler 도 매 페이지 렌더 필요.
 
 트리거 조건:
     analyzer 가 heuristic 으로 SPA_NEXT/NUXT 로 판정한 뒤,
@@ -50,9 +56,20 @@ MIN_TEXT_FIELD_LEN = 3
 # 지원하는 스크립트 후보 (순서대로 시도). format="json" 은 innerText 전체를 json.loads.
 SCRIPT_CANDIDATES = [
     {"selector": "script#__NEXT_DATA__", "format": "json"},
-    # 아래는 Phase 2.5 — 지금은 주석으로만 남김
-    # {"selector": "script#__INITIAL_STATE__", "format": "json"},
 ]
+
+
+# 렌더 경로에서 page.evaluate 로 시도할 전역 변수 (순서대로 첫 유효값 사용)
+RENDER_STATE_CANDIDATES = [
+    "window.__NEXT_DATA__",
+    "window.__NUXT__",
+    "window.__INITIAL_STATE__",
+    "window.__APOLLO_STATE__",
+]
+
+# Playwright 렌더 파라미터 (playwright_discovery 와 동일 값)
+RENDER_NAV_TIMEOUT_MS = 30_000
+RENDER_POST_LOAD_WAIT_MS = 4000
 
 
 LLM_PATH_SYSTEM_PROMPT = """너는 SSR (Next.js/Nuxt) 사이트 초기 상태 JSON 에서
@@ -93,6 +110,9 @@ class EmbeddedJSONStrategy(AnalysisStrategy):
         llm_api_key: Optional[str] = None,
         llm_model: str = "gpt-4o-mini",
         llm_timeout: int = 30,
+        use_playwright_render: bool = False,
+        render_nav_timeout_ms: int = RENDER_NAV_TIMEOUT_MS,
+        render_wait_ms: int = RENDER_POST_LOAD_WAIT_MS,
     ):
         super().__init__(enabled=enabled, name="embedded_json")
         self.timeout = timeout
@@ -102,53 +122,73 @@ class EmbeddedJSONStrategy(AnalysisStrategy):
         self.llm_api_key = llm_api_key
         self.llm_model = llm_model
         self.llm_timeout = llm_timeout
+        self.use_playwright_render = use_playwright_render
+        self.render_nav_timeout_ms = render_nav_timeout_ms
+        self.render_wait_ms = render_wait_ms
 
     def analyze(self, url: str, html: str = None) -> Optional[AnalysisResult]:
+        html_err = ""
         if html is None:
-            html, err = self._fetch(url)
+            html, html_err = self._fetch(url)
+
+        # 1차: HTML-only 경로 (#__NEXT_DATA__ 같이 innerText=JSON 인 경우)
+        found = None
+        if html is not None:
+            found = self._extract_from_html(html)
+
+        # 2차: 렌더 폴백 (use_playwright_render=True 일 때만)
+        if found is None and self.use_playwright_render:
+            rendered, render_err = self._extract_via_render(url)
+            if rendered is not None:
+                found = rendered
+            else:
+                # 렌더도 실패 — 실패 경위 합쳐서 리턴
+                return AnalysisResult(
+                    url=url,
+                    site_type=SiteType.UNKNOWN,
+                    confidence=0.0,
+                    strategy_name=self.name,
+                    notes=(
+                        f"HTML/렌더 모두 embedded state 추출 실패. "
+                        f"html={'ok' if html else 'fail: ' + html_err}, render={render_err}"
+                    ),
+                )
+
+        if found is None:
+            # html 은 있었지만 스크립트 없음, 그리고 렌더 비활성
             if html is None:
                 return AnalysisResult(
                     url=url,
                     site_type=SiteType.UNKNOWN,
                     confidence=0.0,
                     strategy_name=self.name,
-                    notes=f"HTML 가져오기 실패: {err}",
+                    notes=f"HTML 가져오기 실패: {html_err}",
                 )
-
-        soup = BeautifulSoup(html, "lxml")
-
-        found = None
-        for cand in SCRIPT_CANDIDATES:
-            tag = soup.select_one(cand["selector"])
-            if not tag or not tag.string:
-                continue
-            text = tag.string.strip()
-            try:
-                state = json.loads(text)
-            except json.JSONDecodeError:
-                continue
-            found = {"selector": cand["selector"], "state": state}
-            break
-
-        if not found:
             return AnalysisResult(
                 url=url,
                 site_type=SiteType.UNKNOWN,
                 confidence=0.0,
                 strategy_name=self.name,
-                notes="지원 포맷의 embedded JSON 스크립트 없음 "
-                      "(현재: #__NEXT_DATA__ 만 지원, __NUXT__ factory form 은 Phase 2.5)",
+                notes=(
+                    "HTML 안에 지원 포맷의 embedded JSON 스크립트 없음 "
+                    "(현재: #__NEXT_DATA__). "
+                    "렌더 경로는 비활성 (use_playwright_render=False) — "
+                    "__NUXT__ 팩토리 같은 동적 state 는 미탐지."
+                ),
             )
 
         candidates = self._find_array_paths(found["state"])
         if not candidates:
+            src_label = found.get("script_selector") or found.get("state_source") or "?"
             return AnalysisResult(
                 url=url,
                 site_type=SiteType.UNKNOWN,
                 confidence=0.0,
                 strategy_name=self.name,
-                notes=f"state 파싱 성공 ({found['selector']}) 했지만 "
-                      f"공고 배열 후보 없음 (len>={MIN_ARRAY_LEN} + 텍스트성 필드 있는 배열)",
+                notes=(
+                    f"state 파싱 성공 ({src_label}) 했지만 "
+                    f"공고 배열 후보 없음 (len>={MIN_ARRAY_LEN} + 텍스트성 필드 있는 배열)"
+                ),
             )
 
         # 길이/텍스트 필드 수로 초안 정렬 — LLM 미사용 시 1위가 최종
@@ -199,10 +239,11 @@ class EmbeddedJSONStrategy(AnalysisStrategy):
         parsed = urlparse(url)
         first_cand = next((c for c in candidates if c["path"] == best_path), candidates[0])
 
+        requires_render = "state_source" in found
         config = {
             "platform": "embedded_json",
             "base_url": f"{parsed.scheme}://{parsed.netloc}",
-            "script_selector": found["selector"],
+            "requires_render": requires_render,
             "item_path": best_path,
             "item_length": first_cand["length"],
             "first_item_keys": first_cand["first_keys"],
@@ -214,6 +255,12 @@ class EmbeddedJSONStrategy(AnalysisStrategy):
                 for c in candidates[:10]
             ],
         }
+        if requires_render:
+            config["state_source"] = found["state_source"]
+            src_label = found["state_source"]
+        else:
+            config["script_selector"] = found["script_selector"]
+            src_label = found["script_selector"]
 
         return AnalysisResult(
             url=url,
@@ -222,10 +269,82 @@ class EmbeddedJSONStrategy(AnalysisStrategy):
             config=config,
             strategy_name=self.name,
             notes=(
-                f"embedded JSON: {found['selector']} → "
-                f"item_path={best_path} (length={first_cand['length']}, source={selection_source})"
+                f"embedded JSON: {src_label} → "
+                f"item_path={best_path} (length={first_cand['length']}, "
+                f"source={selection_source}, render={requires_render})"
             ),
         )
+
+    # --- state 추출 경로별 헬퍼 ---
+
+    def _extract_from_html(self, html: str) -> Optional[dict]:
+        """HTML 안에서 SCRIPT_CANDIDATES 중 파싱되는 첫 후보 반환."""
+        soup = BeautifulSoup(html, "lxml")
+        for cand in SCRIPT_CANDIDATES:
+            tag = soup.select_one(cand["selector"])
+            if not tag or not tag.string:
+                continue
+            text = tag.string.strip()
+            try:
+                state = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            return {"script_selector": cand["selector"], "state": state}
+        return None
+
+    def _extract_via_render(self, url: str) -> tuple[Optional[dict], str]:
+        """
+        Playwright 로 페이지 열고 RENDER_STATE_CANDIDATES 중 살아있는 첫 값 반환.
+
+        Returns:
+            ({state_source, state}, "")  — 성공
+            (None, err_msg)               — 실패 이유
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as e:
+            return None, f"playwright 모듈 없음: {e}"
+
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                try:
+                    context = browser.new_context(
+                        user_agent=USER_AGENT,
+                        ignore_https_errors=True,
+                    )
+                    page = context.new_page()
+                    try:
+                        page.goto(
+                            url,
+                            wait_until="load",
+                            timeout=self.render_nav_timeout_ms,
+                        )
+                    except Exception:
+                        # 일부 SPA 는 load 이벤트 지연 — 그래도 평가 시도
+                        pass
+                    page.wait_for_timeout(self.render_wait_ms)
+
+                    for expr in RENDER_STATE_CANDIDATES:
+                        try:
+                            state = page.evaluate(f"() => {expr}")
+                        except Exception:
+                            continue
+                        if state is None:
+                            continue
+                        if not isinstance(state, (dict, list)):
+                            # 원시 값 (string/number) 이 걸리면 스킵
+                            continue
+                        return {"state_source": expr, "state": state}, ""
+
+                    return None, (
+                        f"페이지는 열렸으나 RENDER_STATE_CANDIDATES "
+                        f"{RENDER_STATE_CANDIDATES} 중 유효한 전역 변수 없음"
+                    )
+                finally:
+                    browser.close()
+        except Exception as e:
+            return None, f"Playwright 실행 실패: {type(e).__name__}: {e}"
 
     # --- 내부 헬퍼 ---
 
