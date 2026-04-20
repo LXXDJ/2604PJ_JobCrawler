@@ -321,5 +321,50 @@
         "[강남/중랑] 온라인/비대면 보험설계사 모집 (셀프 DB창출)"
       ]
     }
+  },
+  {
+    "site_id": "alba",
+    "url": "https://www.alba.co.kr/job/Main?page=1",
+    "site_type": "static_html",
+    "added_at": "2026-04-20T07:44:39.387128+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://www.alba.co.kr/job/Main",
+      "list_params": {},
+      "base_url": "https://www.alba.co.kr",
+      "selectors": {
+        "list_rows": "tbody.observe-job tr",
+        "subject_link": "td.title a.info",
+        "author": "unknown",
+        "date": "td.regDate",
+        "hit": "unknown",
+        "content": "unknown"
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 100,
+      "fields_matched": {
+        "title": 50,
+        "author": 0,
+        "date": 50,
+        "hit": 0
+      },
+      "sample_titles": [
+        "코웨이 진주평거지국[코디 평균 월소득 327만원] 코웨이 코디 모집",
+        "CU 판교밸리포레점CU판교밸리포레점 평일 야간 알바구합니다",
+        "롯데리아 화성반월점[롯데리아 화성반월점] 관리자,아르바이트 모집-평일/주말/주3일,주5일"
+      ]
+    }
   }
 ]
