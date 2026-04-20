@@ -282,6 +282,7 @@ camhr 이주 ✓, gnuboard_crawler 레거시 제거 ✓.
 | `strategies/heuristic.py` SPA 시그니처 엄격화 | ✓ 완료 (Phase 2.6) | 문자열 매칭 → 할당/id 속성 매칭 |
 | `retry_dom_selectors` validator-피드백 retry | ✓ 완료 (Phase 2.7) | cmd_add 에서 DOM 검증 실패 시 LLM 재시도 (최대 2회) |
 | `extract_site_id` 서브도메인 접두어 스킵 | ✓ 완료 (Phase 2.7) | job/api/recruit 등 의미 없는 prefix 자동 스킵 |
+| `_enrich_with_llm_selectors` heuristic 보충 | ✓ 완료 (Phase 2.8) | heuristic 이 DOM 타입 확정 + selectors 비면 LLM 호출해 병합 |
 | `strategies/` → `extractors/` 디렉토리 개명 | 미완 | 이름 충돌 없고 영향 크지 않아 후순위 |
 | `api_crawler.py` | ✓ 완료 (Phase 3) | camhr 일반화 — GET/POST + item_path + detail 지원 |
 | `validate_api_config` | ✓ 완료 (Phase 3) | stub → 실제 API 호출 + 배열 검증 |
@@ -450,12 +451,40 @@ Mode A 가 37.5% 를 차지해 "validator 가 reject 한 dom config 를 LLM 에 
 - `total_path`, `link_template`, `detail_*` 은 response 구조를 보고 사람이 넣어야 함
   (auto-discovery 가 상세 API 는 캡처 안 함 — 상세 페이지에서만 호출되기 때문).
 
+### Phase 2.8: heuristic 확정 + selectors 비어있으면 LLM 보충 — ✓ 완료
+
+**배경**: 한국/해외 구인 사이트 20개 대량 스크리닝 중 라디오코리아 (LA 한인 라디오)
+에서 드러난 구멍.
+- Heuristic 이 `/bbs/board.php` 시그니처로 `gnuboard` 확정 (confidence=0.7)
+- 테마 자동 매칭 (na-table/fz) 둘 다 실패 → `selectors={}` 반환
+- `is_valid(0.5)` 는 통과 → analyzer 가 그대로 return → can_register 에서
+  "selectors.list_rows 비어있음" 으로 거부
+
+**구현** (`analyzer.analyzer`):
+- `DOM_SELECTOR_REQUIRED_TYPES = {GNUBOARD, STATIC_HTML, WORDPRESS}` 상수
+- `_needs_selector_enrichment(result)` — DOM 타입 + list_rows/subject_link 비면 True
+- `SiteAnalyzer._enrich_with_llm_selectors` — LLMStrategy 재호출 후 selectors/theme/
+  parse_mode 만 병합. site_type/confidence 는 heuristic 값 유지
+  - heuristic 이 잡은 base_url/board_table 등 gnuboard 전역변수 추출은 보존
+  - strategy_name 은 `heuristic+llm_selectors` 로 표기
+- `analyze()` 의 `is_valid` 통과 직후 분기에 enrichment hook 삽입
+
+**검증**: radiokorea `/community/jobs.php` → Phase 2.8 전 거부 (selectors={}),
+후 **93/93 title/author/date 매칭** (미국 LA 한인 구인광고 — PCB BANK / GoldenState
+Imports / Shinhan Bank America 등).
+
+**범위 외 (남은 이슈)**:
+- sydneyhan: site_type=wordpress 자체는 LLM 이 selectors 포함해서 반환했지만
+  `sites_registry.analysis_to_new_schema_config` 가 wordpress 템플릿 미구현.
+- heykorean/hojunara: SPA_NUXT, Playwright 가 API 후보 발견 못한 케이스 — 별도 문제.
+- koreadaily: LLM 이 site_type=unknown 반환, 분류 자체를 못함.
+
 ### Phase 4: 대량 발굴 + 실측 — 미완
 - 캄보디아 구인 사이트 50~100개 발굴
-- `analyze` 배치 스크립트
+- `analyze` 배치 스크립트 (`scripts/batch_analyze.py` 시작점 마련)
 - 성공률 / 실패 유형 분류
 
-### Phase 2.8 (후보): Playwright 렌더 HTML 을 retry 에 공급 — 미완
+### Phase 2.9 (후보): Playwright 렌더 HTML 을 retry 에 공급 — 미완
 - Phase 2.7 의 retry 가 "HTML 에 공고 DOM 없음" 케이스 (사람인/고용24) 에 무력
 - `cmd_add` 에서 `VALIDATOR_RETRY_USE_RENDER=True` 이면 2회차 retry 는 Playwright 로
   렌더한 HTML 을 LLM 에 보냄
