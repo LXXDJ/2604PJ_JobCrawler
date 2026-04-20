@@ -3,16 +3,13 @@
 
 sites.json / REGISTERED_CRAWLS 엔트리를 받아서 적절한 크롤러를 호출.
 
-라우팅 우선순위:
-    1. entry["extraction_method"] (신 스키마) — dom/api/embedded_json
-    2. entry["crawler"]          (레거시 필드) — gnuboard_crawler 만 남음
+라우팅 기준: entry["extraction_method"] → dom / api / embedded_json
 
 Phase 1: DOM 신 경로 (dom_crawler) 구현
 Phase 2: EmbeddedJSON 신 경로 (embedded_crawler) 구현
-Phase 3: API 신 경로 (api_crawler) + camhr 이주 완료 ← 현재
-
-남은 레거시 경로는 gnuboard_crawler 하나 — 구버전 sites.json 백업본을 돌릴 때
-대비해 유지. 신규 엔트리는 모두 extraction_method=dom 로 흘러감.
+Phase 3: API 신 경로 (api_crawler) + camhr 이주 완료
+Phase 이후: gnuboard_crawler / camhr_crawler 레거시 분기 제거. 모든 엔트리가
+           extraction_method 로만 라우팅됨.
 """
 
 
@@ -26,8 +23,8 @@ def dispatch(entry: dict, db_path: str, http_config: dict):
     site_id = entry["site_id"]
     config = entry.get("config") or entry  # 신 스키마는 엔트리 자체가 config
 
-    # --- 신 경로: extraction_method 기준 ---
     method = config.get("extraction_method") or entry.get("extraction_method")
+
     if method == "dom":
         import dom_crawler
         max_pages = (
@@ -70,24 +67,7 @@ def dispatch(entry: dict, db_path: str, http_config: dict):
             http_config=http_config,
         )
 
-    # --- 레거시 경로: entry["crawler"] 문자열 매핑 ---
-    legacy_name = entry.get("crawler")
-
-    if legacy_name == "gnuboard_crawler":
-        # 구 스키마의 gnuboard_crawler 호출 — 아직 마이그레이션 안 된 엔트리용.
-        # Phase 1 에서 sites.json 은 전부 migrate 되지만, 구버전 sites.json 백업본을
-        # 돌릴 때를 대비해 유지.
-        import gnuboard_crawler
-        legacy_config = entry.get("config") or {}
-        return gnuboard_crawler.crawl(
-            site_id=site_id,
-            config=legacy_config,
-            db_path=db_path,
-            max_pages=legacy_config.get("max_pages"),
-            http_config=http_config,
-        )
-
     raise ValueError(
-        f"[{site_id}] 어느 크롤러로도 라우팅 실패 — "
-        f"extraction_method={method!r}, crawler={legacy_name!r}"
+        f"[{site_id}] 어느 크롤러로도 라우팅 실패 — extraction_method={method!r} "
+        f"(신 스키마의 dom/api/embedded_json 중 하나여야 함)"
     )

@@ -156,7 +156,6 @@ for entry in REGISTERED_CRAWLS + sites.json:
       ├─ extraction_method == "embedded_json" → embedded_crawler.crawl(...)
       │     ├─ requires_render=False → requests fetch + <script> 파싱
       │     └─ requires_render=True  → 페이지별 Playwright 렌더 + page.evaluate
-      └─ 레거시 crawler="gnuboard_crawler" → gnuboard_crawler (구 스키마 백업용)
     ↓
     각 크롤러:
       - Paginator: pagination.type (url_param 만 현재 지원)
@@ -193,7 +192,6 @@ crawlers/
 ├── dom_crawler.py               # gnuboard/static_html 통합 DOM 크롤러
 ├── embedded_crawler.py          # embedded_json 크롤러 (HTML + 렌더 경로)
 ├── api_crawler.py               # API 기반 크롤러 (Phase 3 — camhr 이주 완료)
-├── gnuboard_crawler.py          # 레거시 (dom_crawler 완성 후 삭제 예정)
 ├── hardcoded_crawls.py          # REGISTERED_CRAWLS — 현재 비어있음 (camhr 이주 후)
 ├── sites_registry.py            # sites.json I/O + analysis → config 변환 + can_register
 ├── database.py                  # JobDatabase
@@ -204,12 +202,16 @@ crawlers/
 
 ### 5.2 목표 구조 (리팩터 완료 시)
 
-- `analyzer/strategies/` → `analyzer/extractors/` 로 개명 (역할이 classifier vs extractor 로 분화되면)
-- `crawler/` 서브디렉토리로 크롤러들 이동
-- `pagination.py` + `field_mapping.py` 모듈로 로직 분리
-- `hardcoded_crawls.py` 삭제 — 현재 비어있으므로 파일 자체 제거 가능
+- `analyzer/strategies/` → `analyzer/extractors/` 로 개명: **유보**. 원래 전제였던
+  "classifier 와 extractor 의 역할 분화" 가 아직 없음 — 지금 개명하면 diff 만 크고
+  blame 추적성 손실. 실제 분화 필요 시점에 클래스 이름까지 함께 개명 예정.
+- `crawler/` 서브디렉토리로 크롤러들 이동: 미완 (부가적 개선)
+- `pagination.py` + `field_mapping.py` 모듈로 로직 분리: 미완
+- `hardcoded_crawls.py` 삭제: 현재 비어있어 파일 자체 제거 후보. 다만 특수 사이트
+  대비용 "예비 Hook" 으로 남겨둠 — 완전 삭제는 사용 사례 확인 후.
 
-**현재 도달도**: analyzer 분리 ✓, validator 분리 ✓, dom/embedded/api 크롤러 ✓, camhr 이주 ✓. 남은 건 구조적 분리 + gnuboard_crawler 레거시 제거.
+**현재 도달도**: analyzer 분리 ✓, validator 분리 ✓, dom/embedded/api 크롤러 ✓,
+camhr 이주 ✓, gnuboard_crawler 레거시 제거 ✓.
 
 ---
 
@@ -463,10 +465,11 @@ Mode A 가 37.5% 를 차지해 "validator 가 reject 한 dom config 를 LLM 에 
 - 검색 버튼 클릭, 무한스크롤 유도 등
 - Cloudflare 우회
 
-### 구조 정리 (병렬) — 미완
-- `strategies/` → `extractors/` 개명
-- `crawler/` 서브디렉토리로 크롤러들 묶기
-- `pagination.py` / `field_mapping.py` 모듈 분리
+### 구조 정리 (병렬) — 부분 완료
+- ✓ gnuboard_crawler.py 레거시 제거 + dispatcher 분기 삭제 (Phase 3 후속)
+- ⏸ `strategies/` → `extractors/` 개명 — 유보 (classifier/extractor 역할 분화 필요 시 진행)
+- 미완: `crawler/` 서브디렉토리로 크롤러들 묶기
+- 미완: `pagination.py` / `field_mapping.py` 모듈 분리
 
 ---
 
