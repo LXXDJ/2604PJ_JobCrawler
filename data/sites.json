@@ -217,5 +217,57 @@
         "[(사)대구광역시남구자원봉사센터] 기간제근로자(육아휴직대체인력) 채용 공고"
       ]
     }
+  },
+  {
+    "site_id": "wanted",
+    "url": "https://www.wanted.co.kr/wdlist",
+    "site_type": "api_discovered",
+    "added_at": "2026-04-20T07:26:47.279036+00:00",
+    "extraction_method": "api",
+    "requires_render": false,
+    "source": {
+      "api_endpoint": "https://www.wanted.co.kr/api/chaos/navigation/v1/results",
+      "method": "GET",
+      "base_url": "https://www.wanted.co.kr",
+      "request_headers": {
+        "wanted-user-agent": "user-web",
+        "sec-ch-ua-platform": "\"Windows\"",
+        "referer": "https://www.wanted.co.kr/wdlist",
+        "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
+        "sec-ch-ua-mobile": "?0",
+        "wanted-user-language": "ko",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "accept": "application/json, text/plain, */*",
+        "wanted-user-country": "KR"
+      },
+      "list_params": {
+        "1776669998842": "",
+        "country": "kr",
+        "job_sort": "job.latest_order",
+        "years": "-1",
+        "locations": "all",
+        "limit": "20"
+      },
+      "item_path": "data"
+    },
+    "pagination": {
+      "type": "api_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 20,
+      "fields_matched": {
+        "title": 20
+      },
+      "sample_titles": [
+        "그로스 앤 세일즈 마케팅 리드",
+        "CS Manager",
+        "[글로벌 부문]시니어 글로벌 마케터(북미)"
+      ]
+    }
   }
 ]
