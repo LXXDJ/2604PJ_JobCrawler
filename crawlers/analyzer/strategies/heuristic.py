@@ -11,12 +11,66 @@ HTML 내용을 분석해서 사이트 타입을 판단하고
 - STATIC_HTML : 위에 해당 없음
 """
 
+import html as html_lib
 import re
 import time
 import requests
 from typing import Optional
+from urllib.parse import parse_qs, urlparse
 from ..models import AnalysisResult, SiteType
 from .base import AnalysisStrategy
+
+
+# 상세링크 ID 파라미터 후보 — 점수 동률일 때 tie-breaker 로만 사용.
+# 보너스를 크게 주면 radiokorea 처럼 본문은 id= 이지만 footer/archive 영역의 소수 wr_id 에
+# 넘어가므로, 기본은 "distinct numeric 값이 가장 많은 파라미터" 가 이긴다.
+DETAIL_ID_PARAM_CANDIDATES = ("wr_id", "no", "id", "idx", "bno", "seq")
+
+
+def _detect_detail_id_param(html: str) -> Optional[str]:
+    """페이지의 앵커 href 들을 훑어 "numeric ID" 로 가장 잘 맞는 쿼리 파라미터를 추정.
+
+    예) ppomppu — view.php?id=guin&no=9860 → 'no' 가 각 링크마다 다른 숫자
+       radiokorea — jobs_ads_view.php?id=4177 → 'id'
+       hanin — board.php?bo_table=Information&wr_id=58 → 'wr_id' (2자리 ID 도 허용)
+
+    판정 규칙:
+      - href 는 HTML 엔티티 디코드 (`&amp;` → `&`) 후 쿼리 파싱 —
+        안 그러면 `&amp;wr_id=` 가 `amp;wr_id` 키로 잘못 파싱됨.
+      - 각 파라미터별 "등장한 숫자값 집합" 수집 (2자리 이상)
+      - 고유 숫자값 3개 미만은 후보 탈락 (nav/footer 배제)
+      - 기본 순위는 distinct 값 개수. 같은 개수라면 DETAIL_ID_PARAM_CANDIDATES 내 순서 우대.
+      - 후보 없으면 None — caller 가 기본값 폴백 (gnuboard 는 'wr_id')
+    """
+    hrefs = re.findall(r'href="([^"]+)"', html)
+    param_values: dict[str, set] = {}
+    for raw in hrefs:
+        h = html_lib.unescape(raw)
+        try:
+            qs = parse_qs(urlparse(h).query)
+        except Exception:
+            continue
+        for k, vs in qs.items():
+            for v in vs:
+                if v.isdigit() and len(v) >= 2:
+                    param_values.setdefault(k, set()).add(v)
+
+    scored = []
+    for k, vs in param_values.items():
+        if len(vs) < 3:
+            continue
+        # 1순위: distinct 개수. 2순위: 후보 리스트 내 우선순위(있으면).
+        cand_rank = (
+            len(DETAIL_ID_PARAM_CANDIDATES) - DETAIL_ID_PARAM_CANDIDATES.index(k)
+            if k in DETAIL_ID_PARAM_CANDIDATES
+            else 0
+        )
+        scored.append((len(vs), cand_rank, k))
+
+    if not scored:
+        return None
+    scored.sort(reverse=True)
+    return scored[0][2]
 
 
 USER_AGENT = (
@@ -230,6 +284,12 @@ class HeuristicStrategy(AnalysisStrategy):
             config["theme"] = "unknown"
             config["selectors"] = {}
             config["parse_mode"] = "unknown"
+
+        # 상세링크 ID 파라미터 자동감지 — ppomppu(no)/radiokorea(id) 같은 변종 대응.
+        # 감지 실패 시 converter 에서 'wr_id' 폴백.
+        detected_id_param = _detect_detail_id_param(html)
+        if detected_id_param:
+            config["external_id_from_url_param"] = detected_id_param
 
         return config
 
