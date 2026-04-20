@@ -22,6 +22,47 @@ from ..models import AnalysisResult, SiteType
 from .base import AnalysisStrategy
 
 
+# LLM 랭커에 보낼 후보 개수 (너무 많이 보내면 토큰 비용 ↑, 적으면 진짜를 놓침)
+LLM_RANKER_POOL_SIZE = 10
+
+LLM_RANKER_SYSTEM_PROMPT = """너는 채용공고 사이트에서 캡처된 내부 API 후보들 중
+실제 "공고 리스트"를 반환하는 API 를 식별하는 분석기야.
+
+제외해야 할 것:
+- 메타데이터 / 필터 옵션 (직급/업종/복리후생 코드, 지역 코드 등)
+- 트래킹 / 애널리틱스 / 광고 / 로그인 / 세션
+- 상세 페이지 단건 조회 (배열 아닌 단일 객체)
+- 추천/광고용 배너, 사이드바 위젯
+
+선호 시그널:
+- 응답이 "여러 개 공고" 를 담은 배열/페이지 (title/company/salary/location/date 같은
+  실제 공고성 필드를 가진 객체들)
+- 페이지네이션 필드 (total, page, size 등)
+- 배열 길이가 보통 10~100개 수준
+
+중요: 완벽한 매치가 없어도 **가장 공고 리스트에 가까워 보이는** 후보를 골라라.
+가령 필드명이 한국어/축약형이거나 (jobTitle/compNm/giupNm/postSubject) 구조가 예상과
+다르더라도, "여러 레코드" + "텍스트성 필드 여럿" 이면 공고 리스트 후보로 유효.
+best_index=-1 은 정말로 **전부 명백한 메타데이터/트래킹** 일 때만 쓴다.
+
+응답은 반드시 JSON 하나만. 마크다운 펜스나 설명 없이.
+스키마: {"best_index": N, "reason": "한줄 근거"}
+"""
+
+
+def _build_ranker_user_message(candidates: list) -> str:
+    """LLM 에게 보낼 candidates 요약 문자열"""
+    lines = ["아래 후보 중 공고 리스트 API 의 index 를 골라라.\n"]
+    for i, c in enumerate(candidates):
+        shape = c["response_shape"]
+        lines.append(f"[{i}] {c['method']} {c['url']}")
+        lines.append(f"    score: {c.get('score')}")
+        lines.append(f"    response_shape: {json.dumps(shape, ensure_ascii=False)[:500]}")
+        lines.append(f"    sample: {c['body_snippet'][:300]}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -79,16 +120,28 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
         post_load_wait_ms: int = POST_LOAD_WAIT_MS,
         navigation_timeout_ms: int = NAVIGATION_TIMEOUT_MS,
         top_n: int = 3,
+        use_llm_ranker: bool = False,
+        llm_api_key: Optional[str] = None,
+        llm_model: str = "gpt-4o-mini",
+        llm_timeout: int = 30,
     ):
         """
         post_load_wait_ms: load 이벤트 이후 추가 대기 시간 (지연 XHR 잡기용)
         navigation_timeout_ms: page.goto 타임아웃
         top_n: 리포트에 담을 상위 후보 개수
+        use_llm_ranker: 규칙 점수화 상위 N개를 LLM 에게 보내 "진짜 공고 API" 재선별
+        llm_api_key: OPENAI_API_KEY (use_llm_ranker=True 일 때 필요)
+        llm_model: 랭커용 모델 (기본 gpt-4o-mini — 이 판단엔 충분)
+        llm_timeout: LLM 호출 타임아웃 (초)
         """
         super().__init__(enabled=enabled, name="playwright_discovery")
         self.post_load_wait_ms = post_load_wait_ms
         self.navigation_timeout_ms = navigation_timeout_ms
         self.top_n = top_n
+        self.use_llm_ranker = use_llm_ranker
+        self.llm_api_key = llm_api_key
+        self.llm_model = llm_model
+        self.llm_timeout = llm_timeout
 
     def analyze(self, url: str, html: str = None) -> Optional[AnalysisResult]:
         try:
@@ -113,22 +166,45 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
             )
 
         scored = [(self._score(c), c) for c in captured]
-        scored = [(s, c) for s, c in scored if s > 0]
         scored.sort(key=lambda x: x[0], reverse=True)
 
-        if not scored:
+        # LLM 랭커를 쓸 땐 풀을 넓게 — 규칙점수가 애매한 (URL 키워드 없는) 진짜 공고 API 도 포함.
+        # score <= -3 (트래킹/광고/정적자원) 만 명확히 제외.
+        # LLM 없을 땐 기존대로 score > 0 만 후보.
+        if self.use_llm_ranker:
+            filtered = [(s, c) for s, c in scored if s > -3]
+        else:
+            filtered = [(s, c) for s, c in scored if s > 0]
+
+        if not filtered:
             return AnalysisResult(
                 url=url,
                 site_type=SiteType.UNKNOWN,
                 confidence=0.0,
                 strategy_name=self.name,
-                notes=f"{len(captured)}개 JSON 응답 캡처했지만 채용 API 점수 0 이하 "
-                      f"(힌트 키워드 부족)",
+                notes=f"{len(captured)}개 JSON 응답 캡처했지만 채용 API 후보 없음 "
+                      f"(힌트 키워드 부족 / 전부 트래킹성)",
             )
 
-        top = [c for _, c in scored[: self.top_n]]
-        best = top[0]
-        best_score = scored[0][0]
+        # LLM 랭커가 보는 풀은 상위 N개. LLM 없으면 이 풀이 곧 최종 상위.
+        pool_size = LLM_RANKER_POOL_SIZE if self.use_llm_ranker else self.top_n
+        pool = [{"score": s, **c} for s, c in filtered[:pool_size]]
+
+        llm_selected_index: Optional[int] = None
+        llm_reason = ""
+        if self.use_llm_ranker and self.llm_api_key and len(pool) > 0:
+            llm_selected_index, llm_reason = self._llm_rank(pool)
+
+        if llm_selected_index is not None and 0 <= llm_selected_index < len(pool):
+            best = pool[llm_selected_index]
+            best_score = best["score"]
+            selection_source = f"llm (idx={llm_selected_index})"
+        else:
+            # LLM 미사용 / 실패 / -1 반환 시 → 규칙점수 1위
+            best = pool[0]
+            best_score = best["score"]
+            selection_source = "rule_score"
+
         parsed = urlparse(url)
 
         config = {
@@ -139,14 +215,16 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
             "request_headers": best["request_headers"],
             "response_shape": best["response_shape"],
             "response_sample": best["body_snippet"],
+            "selection_source": selection_source,
+            "llm_reason": llm_reason,
             "all_candidates": [
                 {
                     "url": c["url"],
                     "method": c["method"],
-                    "score": s,
+                    "score": c["score"],
                     "response_shape": c["response_shape"],
                 }
-                for s, c in scored[: self.top_n]
+                for c in pool[: self.top_n]
             ],
             "needs_manual_adapter": True,
         }
@@ -154,16 +232,85 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
         # confidence 는 최고점 기준 러프하게 — 7점 이상이면 0.8, 그 이하는 비례
         confidence = min(0.9, 0.3 + best_score * 0.07)
 
+        notes = (
+            f"API 후보 {len(filtered)}개 발견 (전체 캡처 {len(captured)}), "
+            f"선택: {best['url']} (score={best_score}, source={selection_source})"
+        )
+        if llm_reason:
+            notes += f" | LLM: {llm_reason}"
+
         return AnalysisResult(
             url=url,
             site_type=SiteType.API_DISCOVERED,
             confidence=confidence,
             config=config,
             strategy_name=self.name,
-            notes=f"API 후보 {len(scored)}개 발견, 최상위: {best['url']} (score={best_score})",
+            notes=notes,
         )
 
     # --- 내부 헬퍼 ---
+
+    def _llm_rank(self, pool: list[dict]) -> tuple[Optional[int], str]:
+        """
+        LLM 에게 후보 풀을 보여주고 진짜 공고 API index 를 선택받는다.
+
+        Returns: (선택된 index | None, reason 문자열)
+        실패하면 (None, 에러설명) — 호출부에서 규칙점수 1위로 폴백한다.
+        """
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=self.llm_api_key, timeout=self.llm_timeout)
+            response = client.chat.completions.create(
+                model=self.llm_model,
+                max_tokens=256,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": LLM_RANKER_SYSTEM_PROMPT},
+                    {"role": "user", "content": _build_ranker_user_message(pool)},
+                ],
+            )
+            raw = response.choices[0].message.content or ""
+        except Exception as e:
+            return None, f"LLM 호출 실패: {type(e).__name__}: {e}"
+
+        parsed = self._extract_json(raw)
+        if parsed is None:
+            return None, f"LLM 응답 JSON 파싱 실패: {raw[:200]!r}"
+
+        try:
+            idx = int(parsed.get("best_index", -1))
+        except (TypeError, ValueError):
+            return None, f"best_index 숫자 아님: {parsed!r}"
+
+        reason = str(parsed.get("reason", ""))[:300]
+
+        # -1 이면 "적절한 후보 없음" → 폴백
+        if idx < 0:
+            return None, f"LLM: 적절한 공고 API 없음 — {reason}"
+
+        if idx >= len(pool):
+            return None, f"LLM: 범위 초과 index={idx} (pool={len(pool)}) — {reason}"
+
+        return idx, reason
+
+    def _extract_json(self, text: str) -> Optional[dict]:
+        """LLM 응답에서 JSON 꺼내기 — response_format=json_object 덕에 보통 그대로 파싱됨."""
+        text = text.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text)
+            text = re.sub(r"\s*```\s*$", "", text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                return None
+        return None
 
     def _capture_network(self, url: str) -> list[dict]:
         """

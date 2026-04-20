@@ -74,6 +74,13 @@ LLM_MODEL = "gpt-4o-mini"
 # False: SPA 는 그대로 거부 (사람이 개발자도구로 API 찾아서 hardcoded_crawls.py 에 등록)
 USE_PLAYWRIGHT_DISCOVERY = True
 
+# -- Playwright API 후보 LLM 랭커 --
+# True : 규칙 점수화 상위 10개를 LLM 에게 넘겨 "진짜 공고 리스트 API" 를 재선별.
+#        메타데이터/필터옵션 API 를 걸러내는 데 효과적.
+#        USE_LLM=True 이고 LLM_API_KEY 있을 때만 실제 호출. 실패 시 규칙점수 1위로 폴백.
+# False: 규칙 점수 1위 그대로 사용 (기존 동작)
+USE_LLM_API_RANKER = True
+
 # -- 분석 결과 신뢰도 임계값 --
 # 이 값보다 낮으면 유효하지 않다고 판단 (다음 전략 시도 or 실패)
 MIN_CONFIDENCE = 0.5
@@ -141,7 +148,12 @@ def cmd_analyze(url: str):
                 max_retries=HTTP_MAX_RETRIES,
                 retry_backoff=HTTP_RETRY_BACKOFF,
             ),
-            PlaywrightDiscoveryStrategy(enabled=USE_PLAYWRIGHT_DISCOVERY),
+            PlaywrightDiscoveryStrategy(
+                enabled=USE_PLAYWRIGHT_DISCOVERY,
+                use_llm_ranker=USE_LLM_API_RANKER and USE_LLM,
+                llm_api_key=LLM_API_KEY,
+                llm_model=LLM_MODEL,
+            ),
             LLMStrategy(
                 enabled=USE_LLM,
                 api_key=LLM_API_KEY,
@@ -199,7 +211,12 @@ def cmd_add(url: str):
                 max_retries=HTTP_MAX_RETRIES,
                 retry_backoff=HTTP_RETRY_BACKOFF,
             ),
-            PlaywrightDiscoveryStrategy(enabled=USE_PLAYWRIGHT_DISCOVERY),
+            PlaywrightDiscoveryStrategy(
+                enabled=USE_PLAYWRIGHT_DISCOVERY,
+                use_llm_ranker=USE_LLM_API_RANKER and USE_LLM,
+                llm_api_key=LLM_API_KEY,
+                llm_model=LLM_MODEL,
+            ),
             LLMStrategy(enabled=USE_LLM, api_key=LLM_API_KEY, model=LLM_MODEL),
         ],
     )
