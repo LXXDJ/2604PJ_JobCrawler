@@ -4,6 +4,7 @@ __pycache__/
 venv/
 data/*.json
 !data/sites.json
+!data/site_candidates.json
 data/*.csv
 *.db
 logs/
