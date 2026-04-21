@@ -7,3 +7,4 @@ data/*.json
 data/*.csv
 *.db
 logs/
+.claude/
