@@ -21,7 +21,8 @@
 | Step 1 | 한인회 / 시엠립 (그누보드) | HTML 파싱, 설정 기반 멀티사이트 크롤러 | 완료 |
 | Step 2 | CamHR + 자동화 기반 | REST API 크롤링, DB 증분 수집, **사이트 자동 분석기** | 완료 |
 | Step 2.x | 범용 DOM / EmbeddedJSON / API 추출 | 3가지 추출 경로 통합, validator + LLM retry | 완료 |
-| Step 3 | 자동 크롤링 파이프라인 | Task Scheduler + Slack 알림 + 헬스체크 | 진행 중 |
+| Step 3 | 자동 크롤링 파이프라인 | Task Scheduler + Slack 알림 + 헬스체크 | 완료 |
+| Step 3.5 | **봇차단 / 방어 패턴 돌파** | curl_cffi(JA3) · LLM Ranker 재시도 · SPA post-hoc recovery · 2단계 중첩 `[*]` · validator 2차 시그널 | 완료 |
 
 ---
 
@@ -42,7 +43,7 @@
 
 ---
 
-### 하 — 정적 HTML / 그누보드 (10개)
+### 하 — 정적 HTML / 그누보드 (11개)
 
 **공통 특징**: 초기 HTML 응답에 공고 리스트가 그대로 박혀있음. User-Agent 만 바꾸면 그냥 긁힘.
 **도입 기법**: `heuristic.py` 의 플랫폼 시그니처 탐지 (그누보드 전역변수, 알려진 테마 CSS 셀렉터). 실패하면 LLM 에 selector 추천 요청.
@@ -62,7 +63,7 @@
 
 ---
 
-### 중 — SPA 내부 API 스니핑 (4개)
+### 중 — SPA 내부 API 스니핑 (6개)
 
 **공통 특징**: 초기 HTML 은 빈 껍데기 (React/Nuxt/Next.js). 공고 리스트는 JS 가 나중에 `/api/...` 를 호출해서 채움. HTML 만 긁으면 0건.
 **도입 기법**:
@@ -192,7 +193,7 @@ JA3 지문까지 흉내내도 막히는 사이트. curl_cffi 적용 이후 재�
 3. **EmbeddedJSON** — `#__NEXT_DATA__` / `window.__NUXT__` 같은 전역 state 에서 SSR 데이터 추출. Playwright 렌더 경로 포함 (HTML-only 로 못 찾는 factory form CSR 대응).
 4. **LLM** — 앞 전략이 전부 실패했을 때 OpenAI(GPT-4o-mini) 가 HTML 분석 → 셀렉터 추천. 비용 최후의 보루.
 
-**분석 결과는 validator 로 실제 검증** — 샘플 제목을 뽑아 config 가 동작하는지 확인. 실패하면 LLM 에 실패 사유와 함께 **selectors 를 고쳐달라고 retry** (최대 2회, `VALIDATOR_RETRY_MAX` 로 조정).
+**SPA post-hoc recovery** ([analyzer.py `_recover_spa_with_playwright`](crawlers/analyzer/analyzer.py)): heuristic 이 명시적 SPA 마커(`__NUXT__`, `/_nuxt/`)를 못 잡아도 LLM 이 "빈 HTML = SPA" 로 뒤늦게 판정하면 **playwright_discovery 를 retroactively 재호출**. 벼룩시장(findall) 처럼 마커 없는 SPA 대응.
 
 **자동 생성되는 3가지 extraction_method:**
 
@@ -200,7 +201,25 @@ JA3 지문까지 흉내내도 막히는 사이트. curl_cffi 적용 이후 재�
 |--------|-------------|-------------|
 | `dom` | 정적 HTML (그누보드, 일반 리스트 페이지) | [crawlers/dom_crawler.py](crawlers/dom_crawler.py) |
 | `embedded_json` | SSR state 가 HTML 에 박힌 Next/Nuxt | [crawlers/embedded_crawler.py](crawlers/embedded_crawler.py) |
-| `api` | REST API 가 드러난 SPA (CamHR, Wanted) | [crawlers/api_crawler.py](crawlers/api_crawler.py) |
+| `api` | REST API 가 드러난 SPA (CamHR, Wanted, findall 등) | [crawlers/api_crawler.py](crawlers/api_crawler.py) |
+
+#### Validator — LLM 환각 방어선
+
+`analyzer` 가 생성한 config 를 sites.json 에 저장하기 전에 **실제로 돌려본다**. 통과 못 하면 저장 거부 — "프로덕션에서 0건 수집" 같은 침묵 실패 방지.
+
+- **DOM validator**: list_rows 매칭 ≥ 2, subject_link 로 제목 뽑힌 비율 ≥ 50%, UI 노이즈(로그인/검색 등)만 잡히면 거부
+- **API validator**: HTTP 200 + item_path 배열 길이 ≥ 2 + 제목성 필드 비율 ≥ 50%. 여기에 **3가지 2차 시그널 체크** 추가로 필터옵션/코드테이블 가드 ([validator.py:27-58](crawlers/analyzer/validator.py#L27-L58)):
+  1. 제목 평균 길이 ≥ 8자 (필터코드는 2~6자)
+  2. 2차 시그널(회사·날짜·위치·URL·급여·공고ID 등) 보유 아이템 ≥ 50%
+  3. `{id,code,name,value,label}` 3개 이하 필드만 가진 아이템이 80%+ → "코드테이블" 로 거부
+
+**2단계 중첩 item_path 자동 탐지**: 응답이 `data.partTimeJobList[i].jobAdList[j]` 같은 2중 중첩이면 외부 배열엔 제목이 없다. validator 가 이 상황을 탐지해 item_path 를 `[*]` 와일드카드 구문으로 자동 업그레이드 (`data.partTimeJobList[*].jobAdList`). `_traverse_path` 가 양쪽(validator + api_crawler)에서 `[*]` 를 지원.
+
+#### Retry 루프 2종
+
+**DOM retry** ([llm.py `retry_dom_selectors`](crawlers/analyzer/strategies/llm.py)): validator 가 DOM selector 실패로 거부 → LLM 에게 실패 사유와 기존 selectors 를 보내 **수정 제안** 요청 → 재검증. 최대 `VALIDATOR_RETRY_MAX` 회.
+
+**API LLM Ranker retry** ([playwright_discovery.py `llm_rank_candidates`](crawlers/analyzer/strategies/playwright_discovery.py)): LLM 이 1위로 고른 API 가 validator 에 거부되면 **해당 idx 를 exclude 에 추가**하고 LLM 에게 "이 후보들 빼고 다시 골라라" 요청. pool 은 `result.config["_ranker_pool"]` (언더스코어 prefix 라 sites.json 저장 안 됨) 에 보존. 링커리어·알바몬 같은 GraphQL 필터옵션 API 오인식 케이스 대응.
 
 ### 2. 크롤러 + Dispatcher
 
@@ -408,8 +427,10 @@ Register-ScheduledTask -TaskName "JobCrawler" -Action $action -Trigger $trigger 
 | 작업 | 내용 |
 |------|------|
 | 1,500 사이트 확장 | analyzer 신뢰도 재튜닝 + `python main.py add <URL>` 배치 등록 |
-| 사이트 전원 재시도 격리 | 단일 사이트 타임아웃이 배치 전체 ExecutionTimeLimit 을 먹지 않게 per-site timeout |
+| 사이트별 재시도 격리 | 단일 사이트 타임아웃이 배치 전체 ExecutionTimeLimit 을 먹지 않게 per-site timeout |
 | WordPress / 기타 플랫폼 | 현재 heuristic 은 구조만 준비 — 실제 샘플로 selectors 확정 필요 |
+| 인터랙티브 SPA | 스카우트(scout.co.kr) 처럼 스크롤/클릭 이후에만 XHR 발사되는 사이트 — playwright_discovery 에 auto-scroll / 기본 필터 클릭 같은 최소 상호작용 단계 추가 |
+| OpenAPI 어댑터 | 고용24·알리오처럼 공공 OpenAPI 제공 사이트를 `hardcoded_crawls.py` 에 OpenAPI 호출 어댑터로 수동 등록하는 패턴 정립 |
 
 ---
 
