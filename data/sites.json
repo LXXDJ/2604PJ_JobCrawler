@@ -749,5 +749,50 @@
         "화성시우정읍 숙식제공/,교포가능/단순 현장직, 단순생산직 /누구나 /  토목가설재 /"
       ]
     }
+  },
+  {
+    "site_id": "hibrain",
+    "url": "https://www.hibrain.net/recruitment/categories/JOB/categories/EXP/recruits",
+    "site_type": "static_html",
+    "added_at": "2026-04-21T05:45:34.307736+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://www.hibrain.net/recruitment/categories/JOB/categories/EXP/recruits",
+      "list_params": {},
+      "base_url": "https://www.hibrain.net",
+      "selectors": {
+        "list_rows": "#articleList > li.row.sortRoot",
+        "subject_link": "span.td_title > a",
+        "author": "unknown",
+        "date": "span.td_rdtm",
+        "hit": "span.td_cnt",
+        "content": "unknown"
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 25,
+      "fields_matched": {
+        "title": 25,
+        "author": 0,
+        "date": 25,
+        "hit": 25
+      },
+      "sample_titles": [
+        "미래에셋증권 AI/Tech (Security) Specialist 모집",
+        "서울특별시 은평구 보건소 지방임기제공무원 의사 모집",
+        "한국해양진흥공사 상임감사/비상임이사 모집"
+      ]
+    }
   }
 ]

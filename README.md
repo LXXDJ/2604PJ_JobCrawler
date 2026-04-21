@@ -27,7 +27,7 @@
 
 ## 크롤링 대상
 
-현재 **15개 사이트 등록** (2026-04-21 기준). 9개 → 15개 확장 과정에서 사이트별 방어 강도가 크게 달라 **난이도별로 분류**하고, 각 단계에서 도입한 우회 기법을 정리함.
+현재 **17개 사이트 등록** (2026-04-21 기준). 9개 → 17개 확장 과정에서 사이트별 방어 강도가 크게 달라 **난이도별로 분류**하고, 각 단계에서 도입한 우회 기법을 정리함.
 
 > 목록은 `python scripts/list_sites.py` 로 확인. 비활성화된 사이트는 `enabled: false` 로 건너뜀.
 
@@ -35,10 +35,10 @@
 
 | 난이도 | 특징 | 필요한 기법 | 사이트 수 |
 |--------|------|-------------|-----------|
-| **하** | 정적 HTML, 봇차단 없음 | `requests` + CSS selector (heuristic 자동) | 10 |
+| **하** | 정적 HTML, 봇차단 없음 | `requests` + CSS selector (heuristic 자동) | 11 |
 | **중** | SPA, JSON API 뒤에 목록 숨김 | Playwright 로 내부 API 스니핑 + LLM Ranker | 5 |
 | **상** | JA3/TLS 지문 탐지로 403 | curl_cffi (Chrome TLS impersonate) | 1 |
-| 미해결 | OpenAPI 전용 / 인터랙티브 / 쿠키 세션 | 추가 엔지니어링 or 별도 경로 | 3~ |
+| 미해결 | OpenAPI 전용 / 인터랙티브 | 추가 엔지니어링 or 별도 경로 | 2~ |
 
 ---
 
@@ -57,7 +57,8 @@
 | incruit | https://job.incruit.com/jobdb_list/searchjob.asp | static_html | `today=y` 파라미터로 당일만 |
 | alba | https://www.alba.co.kr/job/Main | static_html | 알바천국 |
 | peoplenjob | https://www.peoplenjob.com/jobs | static_html | 피플앤잡 (외국계 전문) |
-| career | https://job.career.co.kr/jobs/ | static_html | 커리어 |ㄴ
+| career | https://job.career.co.kr/jobs/ | static_html | 커리어 |
+| hibrain | hibrain.net/recruitment/categories/JOB/categories/EXP/recruits | static_html | 하이브레인 (연구/박사급) |
 
 ---
 
@@ -140,15 +141,15 @@ response = cffi_requests.get(url, impersonate="chrome131", headers=..., ...)
 | 벼룩시장 (findall) | **등록 완료** — 18건 수집 | 2단계 중첩 구조 (`data.partTimeJobList[*].jobAdList`) 를 validator 가 자동 탐지해 item_path 를 `[*]` 구문으로 업그레이드. `_traverse_path` 양쪽(validator + api_crawler)에 와일드카드 지원 추가 |
 | 스카우트 (scout) | recovery 작동하나 Playwright 가 XHR 캡처 0건 | 리스트 페이지가 스크롤/클릭 같은 상호작용 후에만 XHR 발생하는 타입 — 인터랙티브 Playwright 필요 (별건 과제) |
 
-#### ③ 쿠키/세션 기반 심화 방어
+#### ③ 쿠키/세션 기반 심화 방어 — **해결됨**
 
-JA3 지문까지 흉내내도 막힘. 서버가 첫 GET 응답에 쿠키를 내려주고, 그 쿠키가 붙은 두번째 요청만 허용하는 식.
+JA3 지문까지 흉내내도 막히는 사이트. curl_cffi 적용 이후 재확인해보니 하이브레인은 이제 정상 통과. 실제 문제는 "**잘못된 URL**" 이었음 — `/jobs` 페이지가 카테고리 내비게이션 허브였고 진짜 공고는 `/recruitment/categories/JOB/categories/EXP/recruits` 같은 서브 URL 에 있음.
 
-| 사이트 | 증상 |
-|--------|------|
-| 하이브레인 (hibrain) | curl_cffi 로도 403 유지 — 쿠키 세션/챌린지 우회 필요 |
+| 사이트 | 상태 | 비고 |
+|--------|------|------|
+| 하이브레인 (hibrain) | **등록 완료** — 228건 수집 | URL 을 `/recruitment/categories/JOB/categories/EXP/recruits` (경력자 카테고리) 로 지정 |
 
-→ Playwright 실제 렌더로 쿠키 획득 후 세션 재사용 필요.
+→ 교훈: "봇차단으로 보이는 403" 이 실제로는 URL 이 의미 없는 네비게이션 페이지라 공고 selectors 가 안 맞는 경우가 있음. curl_cffi 정상 동작 확인 후 사이트 구조 재탐색 필요.
 
 #### ④ 로컬 네트워크 이슈
 
