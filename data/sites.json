@@ -838,5 +838,50 @@
         "[면접비 지원] #솔직히 이 공고 좀 이상합니다"
       ]
     }
+  },
+  {
+    "site_id": "seoulkcr",
+    "url": "https://work.seoulkcr.com/wanted/",
+    "site_type": "static_html",
+    "added_at": "2026-04-21T06:45:31.144666+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://work.seoulkcr.com/wanted/",
+      "list_params": {},
+      "base_url": "https://work.seoulkcr.com",
+      "selectors": {
+        "list_rows": "table.cof-tbl.wanted_list > tbody > tr.work-toggle-parent",
+        "subject_link": "td.info > span.title > a",
+        "author": "td.area > span.company > a",
+        "date": "td.data > span.today",
+        "hit": "unknown",
+        "content": "td.detailinfo"
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 20,
+      "fields_matched": {
+        "title": 20,
+        "author": 20,
+        "date": 20,
+        "hit": 0
+      },
+      "sample_titles": [
+        "용인(하이닉스)//평택(삼성전자)// 수장,반장,기공,조공모집/풀연장/3끼식사무상/주급가능",
+        "(서울택시자격증 없어도가능) 카카오택시 T블루 기사모집 월수350만이상",
+        "식자재업체 배송직 구함 정직원(차량지원) 월330만이상 밤12시-오전09시현지퇴근(휴게시간1시간) / 지입기사님 별도구함/인근거주자환영"
+      ]
+    }
   }
 ]

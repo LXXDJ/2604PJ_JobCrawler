@@ -19,15 +19,13 @@
 
   {"category": "종합_포털", "name": "캐치", "url": "https://www.catch.co.kr/", "note": "대졸 공채 중심 — JS SPA, 메인 URL 로 분석"},
   {"category": "종합_포털", "name": "알바몬", "url": "https://www.albamon.com/", "note": "과거 GraphQL 필터옵션 오인식 — validator 강화로 재시도 가치"},
-  {"category": "종합_포털", "name": "교차로 구인구직", "url": "https://www.chol.com/", "note": "CSV 기반, 실제 공고 페이지 확인 필요"},
-  {"category": "종합_포털", "name": "벼룩시장 구인구직", "url": "https://www.beol.kr/", "note": "findall 과 별개 도메인인지 확인 필요"},
+  {"category": "종합_포털", "name": "교차로 구인구직 (서울)", "url": "https://work.seoulkcr.com/wanted/", "note": "/wanted/ 가 구인(회사→구직자) 방향, 루트는 구직 게시판이라 분리"},
   {"category": "종합_포털", "name": "블라인드 하이어", "url": "https://www.teamblind.com/kr/", "note": "로그인 기반 — 수집 난이도 높음"},
   {"category": "종합_포털", "name": "링크드인", "url": "https://www.linkedin.com/jobs/search/?location=South%20Korea", "skip": true, "skip_reason": "로그인 필수 + TOS 스크래핑 금지"},
   {"category": "종합_포털", "name": "리멤버 채용", "url": "https://career.rememberapp.co.kr/", "note": "CSV 의 rember.co 는 잘못된 도메인 — 수정"},
   {"category": "종합_포털", "name": "자소설닷컴", "url": "https://jasoseol.com/recruit", "note": "신입 공채/자소서"},
   {"category": "종합_포털", "name": "링커리어", "url": "https://linkareer.com/list/activity", "note": "과거 GraphQL 필터옵션 오인식 — 재시도"},
   {"category": "종합_포털", "name": "슈퍼루키", "url": "https://www.superookie.com/", "note": "신입 중견기업"},
-  {"category": "종합_포털", "name": "잡이스", "url": "https://www.jobis.co.kr/"},
   {"category": "종합_포털", "name": "멀티잡", "url": "https://www.multijob.co.kr/"},
 
   {"category": "공공_지자체", "name": "고용24 / 워크넷", "url": "https://www.work24.go.kr/", "skip": true, "skip_reason": "OpenAPI 제공 — 스크래핑 비권장 (키 발급 후 REST 호출)"},

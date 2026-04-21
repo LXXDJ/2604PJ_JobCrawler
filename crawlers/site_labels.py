@@ -26,6 +26,8 @@ SITE_LABELS = {
     "career": "커리어",
     "findall": "벼룩시장",
     "hibrain": "하이브레인",
+    "albamon": "알바몬",
+    "seoulkcr": "서울교차로",
 }
 
 
