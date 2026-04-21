@@ -38,6 +38,37 @@ def send(webhook_url: str, report, *, only_issues: bool = True, timeout: int = 1
         return False
 
 
+def send_crawl_summary(
+    webhook_url: str,
+    per_site_stats: list,
+    started_at: str,
+    finished_at: str,
+    elapsed: str,
+    *,
+    timeout: int = 10,
+) -> bool:
+    """
+    배치 런 종료 요약을 Slack 으로 전송.
+
+    per_site_stats: list of dict with keys:
+        site_id        (str)
+        status         ("ok" | "error")
+        new_count      (int)
+        updated_count  (int)
+        error          (str | None)
+    """
+    payload = _build_crawl_summary_payload(
+        per_site_stats, started_at, finished_at, elapsed
+    )
+    try:
+        resp = requests.post(webhook_url, json=payload, timeout=timeout)
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        print(f"      [WARN] Slack 전송 실패: {type(e).__name__}: {e}")
+        return False
+
+
 # ============================================================
 # Slack Block Kit 페이로드 구성
 # ============================================================
@@ -80,4 +111,44 @@ def _build_payload(report) -> dict:
 
     # 알림 프리뷰(푸시 알림 텍스트)용 fallback
     fallback = f"{header_text} — {summary}"
+    return {"text": fallback, "blocks": blocks}
+
+
+def _build_crawl_summary_payload(per_site_stats, started_at, finished_at, elapsed) -> dict:
+    ok_sites = [s for s in per_site_stats if s["status"] == "ok"]
+    err_sites = [s for s in per_site_stats if s["status"] == "error"]
+    total = len(per_site_stats)
+    total_new = sum(s.get("new_count") or 0 for s in per_site_stats)
+    total_upd = sum(s.get("updated_count") or 0 for s in per_site_stats)
+
+    if err_sites:
+        header_text = f":rotating_light: 크롤 완료: 성공 {len(ok_sites)} / 실패 {len(err_sites)} (전체 {total})"
+    else:
+        header_text = f":white_check_mark: 크롤 완료: {len(ok_sites)}/{total} 성공"
+
+    context_text = (
+        f"소요 *{elapsed}*  ·  신규 *{total_new}* / 재확인 *{total_upd}*  ·  {started_at} → {finished_at}"
+    )
+
+    # 성공 사이트 + 실패 사이트를 한 덩어리 mrkdwn 으로 — 사이트 수가 많아져도 블록 수 폭발 안 함
+    lines = []
+    for s in per_site_stats:
+        if s["status"] == "ok":
+            lines.append(
+                f":white_check_mark: *{s['site_id']}* — 신규 {s.get('new_count') or 0}, "
+                f"재확인 {s.get('updated_count') or 0}"
+            )
+        else:
+            err = (s.get("error") or "").strip().replace("\n", " ")
+            if len(err) > 200:
+                err = err[:200] + "…"
+            lines.append(f":x: *{s['site_id']}* — {err or 'unknown error'}")
+
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": header_text}},
+        {"type": "context", "elements": [{"type": "mrkdwn", "text": context_text}]},
+        {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(lines) or "_(사이트 없음)_"}},
+    ]
+    fallback = f"{header_text} · 신규 {total_new} / 재확인 {total_upd}"
     return {"text": fallback, "blocks": blocks}

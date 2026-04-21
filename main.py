@@ -127,9 +127,12 @@ LOG_DIR = os.path.join(ROOT, "logs")
 #   2) 환경변수로 등록:
 #      Windows: setx SLACK_WEBHOOK_URL "https://hooks.slack.com/services/..."
 #      bash   : export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
-SLACK_ENABLED = False
+SLACK_ENABLED = True
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 SLACK_ONLY_ISSUES = True     # True: 문제(warn/error) 있을 때만 전송 / False: 매 run마다 전송
+# 배치 런 종료 요약을 Slack 에 매 run 보낼지 (사이트별 신규/재확인/실패 표).
+# False 여도 위 헬스체크 경고는 여전히 SLACK_ONLY_ISSUES 규칙대로 전송됨.
+SLACK_CRAWL_SUMMARY = True
 
 # -- 등록된 크롤링 대상 (특수 사이트 전용) --
 # analyzer 로 자동 등록이 불가능한 사이트만 여기에 하드코딩.
@@ -493,21 +496,75 @@ def cmd_crawl():
         site_ids = [e["site_id"] for e in all_entries]
 
         import dispatcher
+        batch_db = JobDatabase(DB_PATH)
+        batch_started_iso = started_at.isoformat()
+        per_site_stats = []
 
         for entry in all_entries:
             site_id = entry["site_id"]
             print(f"\n>>> 크롤링 시작: {site_id}")
 
+            dispatch_error = None
             try:
                 dispatcher.dispatch(entry, db_path=DB_PATH, http_config=http_config)
             except Exception as e:
                 # 한 사이트 실패가 전체 crawl 을 중단시키지 않게.
                 # 스케줄러로 매일 돌 때 한 사이트가 죽어도 나머지는 돌아야 함.
                 print(f"  [ERROR] {site_id} 크롤링 실패: {type(e).__name__}: {e}")
+                dispatch_error = f"{type(e).__name__}: {e}"
+
+            # 이번 배치 런 동안 이 사이트에 생긴 crawl_runs 최신 row 조회.
+            # dispatcher 가 crawl_runs row 를 만들기 전에 터지면 없을 수 있음 → dispatch_error 로 표기.
+            run_row = None
+            try:
+                with batch_db.connect() as conn:
+                    row = conn.execute(
+                        "SELECT new_count, updated_count, error FROM crawl_runs "
+                        "WHERE source = ? AND started_at >= ? "
+                        "ORDER BY started_at DESC LIMIT 1",
+                        (site_id, batch_started_iso),
+                    ).fetchone()
+                    if row is not None:
+                        run_row = dict(row)
+            except Exception as e:
+                print(f"  [WARN] crawl_runs 조회 실패 ({site_id}): {type(e).__name__}: {e}")
+
+            if run_row is not None:
+                err = run_row.get("error") or dispatch_error
+                per_site_stats.append({
+                    "site_id": site_id,
+                    "status": "error" if err else "ok",
+                    "new_count": run_row.get("new_count") or 0,
+                    "updated_count": run_row.get("updated_count") or 0,
+                    "error": err,
+                })
+            else:
+                per_site_stats.append({
+                    "site_id": site_id,
+                    "status": "error" if dispatch_error else "ok",
+                    "new_count": 0,
+                    "updated_count": 0,
+                    "error": dispatch_error or "crawl_runs row 없음 (dispatcher 진입 전 실패 가능)",
+                })
 
         finished_at = datetime.datetime.now()
         elapsed = finished_at - started_at
         print(f"\n[{finished_at:%Y-%m-%d %H:%M:%S}] crawl 완료 (소요 {elapsed})")
+
+        if SLACK_ENABLED and SLACK_CRAWL_SUMMARY:
+            if not SLACK_WEBHOOK_URL:
+                print("      [WARN] SLACK_ENABLED=True 이지만 SLACK_WEBHOOK_URL 없음 — 요약 전송 스킵")
+            else:
+                import slack_notifier
+                ok = slack_notifier.send_crawl_summary(
+                    SLACK_WEBHOOK_URL,
+                    per_site_stats,
+                    started_at=started_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    finished_at=finished_at.strftime("%H:%M:%S"),
+                    elapsed=str(elapsed).split(".")[0],
+                )
+                if ok:
+                    print("      [Slack] 배치 요약 전송됨")
 
         # 자동 헬스체크 리포트 — 스케줄러로 돌 때 문제를 놓치지 않으려면 필수
         try:
