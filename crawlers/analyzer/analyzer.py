@@ -92,6 +92,8 @@ class SiteAnalyzer:
             → 모두 실패 시 LLM 은 스킵 (SPA HTML 은 빈 껍데기라 의미 없음)
           - heuristic 이 SPA 아니고 유효 → 그 결과 바로 반환
           - heuristic 유효하지 않음 (예: static_html with low confidence) → LLM 폴백
+          - LLM 이 뒤늦게 SPA 판정 (heuristic 에선 놓침) → playwright_discovery
+            를 retroactively 재호출 (post-hoc SPA recovery)
         """
         last_result: Optional[AnalysisResult] = None
         heuristic_type: Optional[SiteType] = None
@@ -136,6 +138,21 @@ class SiteAnalyzer:
                     enriched = self._enrich_with_llm_selectors(url, result)
                     if enriched is not None:
                         return enriched
+
+                # Post-hoc SPA recovery — LLM (또는 embedded_json) 이 뒤늦게 SPA 로 판정했지만
+                # heuristic 이 SPA 마커를 못 잡아서 playwright_discovery 가 스킵된 경우. 예:
+                # 스카우트 는 초기 HTML 빈 껍데기지만 `window.__NUXT__=`/`/_nuxt/` 마커 없어
+                # heuristic 이 SPA 못 잡음. LLM 이 "HTML 빈 껍데기 = SPA" 라고 추측한 결과를
+                # 버리지 않고 playwright_discovery 에 한 번 더 기회를 준다.
+                if (
+                    result.site_type in SPA_TYPES
+                    and heuristic_type not in SPA_TYPES
+                    and strategy.name != "playwright_discovery"
+                ):
+                    recovered = self._recover_spa_with_playwright(url)
+                    if recovered is not None and recovered.is_valid(self.min_confidence):
+                        return recovered
+
                 return result
 
         if last_result:
@@ -148,6 +165,26 @@ class SiteAnalyzer:
             strategy_name="none",
             notes="모든 전략이 None 을 반환했거나 비활성화됨",
         )
+
+    def _recover_spa_with_playwright(self, url: str) -> Optional[AnalysisResult]:
+        """LLM 이 SPA 라고 뒤늦게 판정한 경우 playwright_discovery 를 재호출.
+
+        루프 안에서는 heuristic_type in SPA_TYPES 조건 때문에 스킵됐지만,
+        LLM 이 "빈 HTML = SPA" 라고 추측했다면 그 추측을 믿고 실제 네트워크 캡처를 시도.
+        스카우트·벼룩시장 같이 명시 SPA 마커가 없는 사이트에 유효.
+        """
+        playwright = next(
+            (s for s in self.strategies
+             if s.name == "playwright_discovery" and s.enabled),
+            None,
+        )
+        if playwright is None:
+            return None
+        try:
+            return playwright.run(url)
+        except Exception:
+            # playwright 자체 예외는 삼킴 — 그냥 recovery 실패로 처리
+            return None
 
     def _enrich_with_llm_selectors(
         self, url: str, heuristic_result: AnalysisResult

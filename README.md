@@ -125,16 +125,16 @@ response = cffi_requests.get(url, impersonate="chrome131", headers=..., ...)
 | 고용24 (work24) | Playwright 로 form submit → 결과 페이지 렌더 후 DOM 추출 |
 | 알리오 (alio) | AJAX 엔드포인트 직접 캡처 후 api_crawler 수동 등록 |
 
-#### ② SPA 타입 매핑 미추가
+#### ② SPA 뒤늦은 감지 (LLM fallback → post-hoc recovery)
 
-analyzer 가 `site_type=spa_nuxt` / `spa_vue` 로 감지는 했지만, [crawlers/sites_registry.py](crawlers/sites_registry.py) 의 `SITE_TYPE_TO_EXTRACTION_METHOD` 딕셔너리에 매핑이 없어서 "미지원" 으로 거절됨.
+**실제 원인**: 애초에 `SITE_TYPE_TO_EXTRACTION_METHOD` 에 매핑이 없는 게 문제가 아니라, heuristic 이 명시적 SPA 마커(`window.__NUXT__=`, `/_nuxt/`, `id="__NEXT_DATA__"`)를 못 찾아 playwright_discovery 가 **아예 실행되지 않는** 것이 진짜 원인. 그 다음 LLM 이 뒤늦게 "빈 HTML = SPA" 라고 추측해도 이미 playwright 기회는 지나감.
 
-| 사이트 | 감지된 타입 |
-|--------|-------------|
-| 스카우트 (scout) | spa_nuxt |
-| 벼룩시장 (findall) | spa_vue |
+**도입 기법**: [analyzer.py `_recover_spa_with_playwright`](crawlers/analyzer/analyzer.py) — 최종 결과가 `SPA_*` 타입이고 heuristic 이 SPA 로 확정하지 않았던 케이스에서 **playwright_discovery 를 retroactively 재호출**. LLM 의 SPA 추측을 버리지 않고 실제 네트워크 캡처 기회를 한 번 더 준다.
 
-→ 간단한 코드 추가로 해결 가능 (spa_nuxt → playwright_discovery, spa_vue → playwright_discovery).
+| 사이트 | 상태 | 비고 |
+|--------|------|------|
+| 벼룩시장 (findall) | recovery 성공 → API 35개 캡처, Ranker/재시도 루프 작동 | 응답이 2단계 중첩 (`data.partTimeJobList[i].jobAdList[j]`) 이라 validator 의 item_path 가 바깥 배열만 잡아서 최종 등록은 실패 — 중첩 path 자동 탐지 추후 과제 |
+| 스카우트 (scout) | recovery 작동, 그러나 Playwright 가 XHR 캡처 0건 | 리스트 페이지가 스크롤/클릭 같은 상호작용 후에만 XHR 발생하는 타입 — 인터랙티브 Playwright 필요 |
 
 #### ③ 쿠키/세션 기반 심화 방어
 
