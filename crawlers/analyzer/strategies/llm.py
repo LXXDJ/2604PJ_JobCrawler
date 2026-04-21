@@ -316,16 +316,23 @@ class LLMStrategy(AnalysisStrategy):
     # --- 내부 헬퍼 ---
 
     def _fetch_html(self, url: str) -> tuple[Optional[str], str]:
-        """단순 fetch — 휴리스틱이 이미 재시도했을 가능성이 크므로 여긴 1회만."""
+        """단순 fetch — 휴리스틱이 이미 재시도했을 가능성이 크므로 여긴 1회만.
+
+        http_client.fetch 경유 — curl_cffi TLS impersonate + cf_bypass_on_403
+        모두 자동 적용. Cloudflare WAF 뒤 사이트(리멤버·자소설) 에 heuristic 이
+        403 으로 fail 했을 때 LLM 폴백이 쿠키 워밍업으로 재시도 할 수 있게 함.
+        """
         try:
-            resp = requests.get(
+            from http_client import fetch
+        except ImportError:
+            from crawlers.http_client import fetch
+        try:
+            return fetch(
                 url,
-                headers={"User-Agent": USER_AGENT},
                 timeout=self.timeout,
-                verify=False,
-            )
-            resp.raise_for_status()
-            return resp.text, ""
+                max_retries=1,
+                cf_bypass_on_403=True,
+            ), ""
         except Exception as e:
             return None, f"{type(e).__name__}: {e}"
 

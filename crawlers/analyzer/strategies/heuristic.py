@@ -153,11 +153,14 @@ class HeuristicStrategy(AnalysisStrategy):
             from crawlers.http_client import fetch
 
         try:
+            # cf_bypass_on_403: Cloudflare WAF 뒤 사이트(리멤버·자소설·슈퍼루키)
+            # 대응 — 403 만나면 Playwright 로 cf_clearance 쿠키 워밍업 후 1회 재시도.
             html = fetch(
                 url,
                 timeout=self.timeout,
                 max_retries=self.max_retries,
                 retry_backoff=self.retry_backoff,
+                cf_bypass_on_403=True,
             )
             return html, ""
         except requests.exceptions.HTTPError as e:

@@ -47,25 +47,32 @@ def fetch(
     url: str,
     params: Optional[dict] = None,
     headers: Optional[dict] = None,
+    cookies: Optional[dict] = None,
     timeout: int = 30,
     max_retries: int = 3,
     retry_backoff: float = 2.0,
     verify_ssl: bool = False,
     return_json: bool = False,
+    cf_bypass_on_403: bool = False,
 ):
     """
     HTTP GET 요청 + 자동 재시도. 내부적으로 curl_cffi 의 Chrome impersonate 사용.
 
+    cookies: 사전 주입할 쿠키 dict. Cloudflare 챌린지 통과 후 cf_clearance 같은
+             쿠키를 넘길 때 사용.
+    cf_bypass_on_403: True 면 첫 403 응답시 Playwright 로 쿠키 워밍업 후 재시도 1회.
+                     리멤버·자소설 같은 Cloudflare WAF 뒤 사이트에서 유효.
+
     Returns: response.text (기본) 또는 response.json() (return_json=True)
 
     실패 시 마지막 예외를 그대로 raise한다.
-    (크롤링 중단이 낫지, 조용히 None 넘기면 이후 로직에서 이상 데이터 만들 수 있음)
     """
     merged_headers = dict(_DEFAULT_BROWSER_HEADERS)
     if headers:
         merged_headers.update(headers)
 
     last_exception = None
+    cf_bypass_attempted = False
 
     for attempt in range(1, max_retries + 1):
         try:
@@ -73,6 +80,7 @@ def fetch(
                 url,
                 params=params,
                 headers=merged_headers,
+                cookies=cookies,
                 timeout=timeout,
                 verify=verify_ssl,
                 impersonate=_IMPERSONATE_TARGET,
@@ -82,20 +90,38 @@ def fetch(
                 print(f"      [retry] {attempt}회 시도 성공")
             return response.json() if return_json else response.text
 
-        except _requests_legacy.exceptions.HTTPError:
-            # 4xx/5xx는 재시도해도 보통 같은 결과 → 즉시 중단
-            raise
-
-        except (_requests_legacy.exceptions.Timeout,
-                _requests_legacy.exceptions.ConnectionError) as e:
-            last_exception = e
-            print(f"      [retry] {type(e).__name__} (attempt {attempt}/{max_retries})")
-
         except Exception as e:
-            # curl_cffi 는 자체 예외(CurlError 계열)를 raise 할 수 있음 — 모두 재시도 대상.
-            # HTTPError 는 status_code 기반이라 curl_cffi 도 requests.exceptions.HTTPError 로 올라옴.
+            # curl_cffi 는 HTTPError/CurlError 등을 자체 네임스페이스로 raise.
+            # _requests_legacy.HTTPError 에 상속되지 않아 except 로 따로 못 잡음
+            # → 통합해서 status_code 속성 유무로 분기.
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            is_http_error = status is not None
+
+            if is_http_error:
+                # 403 + CF bypass 옵션 켜졌으면 Playwright 쿠키 워밍업 한 번 시도
+                if (
+                    status == 403
+                    and cf_bypass_on_403
+                    and not cf_bypass_attempted
+                ):
+                    cf_bypass_attempted = True
+                    try:
+                        from cf_bypass import warm_cookies
+                    except ImportError:
+                        from crawlers.cf_bypass import warm_cookies
+                    print(f"      [CF bypass] 403 감지 — Playwright 로 쿠키 워밍업")
+                    warmed = warm_cookies(url, timeout_ms=timeout * 1000)
+                    if warmed:
+                        cookies = {**(cookies or {}), **warmed}
+                        print(f"      [CF bypass] 쿠키 {len(warmed)}개 획득 — 재시도")
+                        continue
+                    print(f"      [CF bypass] 워밍업 실패 — 원본 403 그대로 raise")
+                # 일반 4xx/5xx 는 재시도해도 같은 결과 → 즉시 중단
+                raise
+
+            # Timeout/ConnectionError/CurlError — 재시도 대상
             last_exception = e
-            print(f"      [retry] {type(e).__name__}: {e} (attempt {attempt}/{max_retries})")
+            print(f"      [retry] {type(e).__name__}: {str(e)[:100]} (attempt {attempt}/{max_retries})")
 
         if attempt < max_retries:
             time.sleep(retry_backoff * attempt)
