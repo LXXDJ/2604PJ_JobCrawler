@@ -381,9 +381,15 @@ def crawl(
             if cap and total_pages_from_api:
                 total_pages = min(total_pages_from_api, cap)
 
-        print(f"\n    수집할 페이지: {start_page} ~ {start_page + total_pages - 1}")
+        # early termination: dom_crawler 와 동일 정책.
+        stop_threshold = pagination.get("consecutive_existing_stop", 30)
+        consecutive_existing = 0
 
-        # 2) 모든 페이지 순회
+        print(f"\n    수집할 페이지: {start_page} ~ {start_page + total_pages - 1}"
+              + (f"  (연속 기존 {stop_threshold}건 시 조기종료)"
+                 if stop_threshold else ""))
+
+        # 2) 페이지 순회
         for page in range(start_page, start_page + total_pages):
             if page == start_page:
                 response_json = first_response
@@ -446,6 +452,7 @@ def crawl(
                 if existing:
                     db.upsert_job(job)
                     updated_count += 1
+                    consecutive_existing += 1
                 else:
                     # detail_content_path 가 있으면 상세에서 그 경로로 다시 뽑기 (덮어씀)
                     if detail and detail_content_path:
@@ -454,9 +461,16 @@ def crawl(
                             job["content"] = val.strip()
                     db.upsert_job(job)
                     new_count += 1
+                    consecutive_existing = 0
                     print(f"      [NEW] {job['title'][:60]}")
 
-            print(f"    누적: 신규 {new_count}, 기존 {updated_count}")
+            print(f"    누적: 신규 {new_count}, 기존 {updated_count}"
+                  f"  (연속 기존 {consecutive_existing})")
+
+            if stop_threshold and consecutive_existing >= stop_threshold:
+                print(f"    [조기종료] 연속 기존 {consecutive_existing} >= {stop_threshold}"
+                      f" — page {page} 에서 중단")
+                break
 
         db.finish_crawl_run(run_id, new_count, updated_count)
 

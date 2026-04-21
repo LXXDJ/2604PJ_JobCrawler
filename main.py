@@ -439,21 +439,29 @@ def cmd_add(url: str):
     print(f"      이제 `python main.py crawl` 실행 시 함께 수집됨.")
 
 
-def _collect_all_entries():
-    """REGISTERED_CRAWLS + sites.json 병합 (crawl / health 공통)"""
+def _collect_all_entries(enabled_only: bool = False):
+    """REGISTERED_CRAWLS + sites.json 병합 (crawl / health 공통).
+
+    enabled_only=True 면 enabled 플래그가 False 인 항목 제외 — crawl 자동화
+    대상에서 빼고 싶은 사이트 (예: JS 렌더 필요한 미구현 사이트) 용.
+    플래그 없으면 기본 enabled 로 간주.
+    """
     import sites_registry
     dynamic = sites_registry.load_all(SITES_JSON_PATH)
-    return list(REGISTERED_CRAWLS) + dynamic
+    entries = list(REGISTERED_CRAWLS) + dynamic
+    if enabled_only:
+        entries = [e for e in entries if e.get("enabled", True)]
+    return entries
 
 
 def cmd_crawl():
     """
     등록된 사이트들을 순차 크롤링 (REGISTERED_CRAWLS + sites.json 병합).
+    enabled=false 인 항목은 건너뛴다.
 
     콘솔 + logs/crawl-YYYYMMDD.log 에 동시에 기록한다.
     끝에 헬스체크 리포트를 자동으로 덧붙임 (스케줄러로 돌면 여기가 유일한 알림 수단).
     """
-    import sites_registry
     from database import JobDatabase
     import healthcheck
 
@@ -475,11 +483,12 @@ def cmd_crawl():
             "retry_backoff": HTTP_RETRY_BACKOFF,
         }
 
-        dynamic_entries = sites_registry.load_all(SITES_JSON_PATH)
-        all_entries = list(REGISTERED_CRAWLS) + dynamic_entries
+        all_entries = _collect_all_entries(enabled_only=True)
+        disabled = [e["site_id"] for e in _collect_all_entries()
+                    if not e.get("enabled", True)]
 
-        print(f"크롤링 대상: 기본 {len(REGISTERED_CRAWLS)}개 + 동적 {len(dynamic_entries)}개 "
-              f"= 총 {len(all_entries)}개")
+        print(f"크롤링 대상: {len(all_entries)}개"
+              + (f"  (비활성 제외: {', '.join(disabled)})" if disabled else ""))
 
         site_ids = [e["site_id"] for e in all_entries]
 

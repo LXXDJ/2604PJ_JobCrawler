@@ -287,9 +287,18 @@ def crawl(
         if cap:
             total_pages = min(total_pages, cap)
 
-        print(f"\n    수집할 페이지: {total_pages}")
+        # early termination: 연속으로 "이미 있음" 이 이 임계치만큼 나오면
+        # 뒤 페이지는 긁지 않고 종료. 신규 발견 시 카운터 리셋되므로
+        # bump(오래된 공고가 위로 끌어올려짐) 상황에도 뚫고 지나감.
+        # 0 이면 비활성 (전체 순회).
+        stop_threshold = pagination.get("consecutive_existing_stop", 30)
+        consecutive_existing = 0
 
-        # 2) 모든 페이지 순회
+        print(f"\n    수집할 페이지: {total_pages}"
+              + (f"  (연속 기존 {stop_threshold}건 시 조기종료)"
+                 if stop_threshold else ""))
+
+        # 2) 페이지 순회
         start_page = pagination.get("start", 1)
         for page in range(start_page, start_page + total_pages):
             if page == start_page:
@@ -325,6 +334,7 @@ def crawl(
                 if existing:
                     db.upsert_job(job)
                     updated_count += 1
+                    consecutive_existing += 1
                 else:
                     try:
                         detail_html = fetch(post["link"], **http_kwargs)
@@ -336,9 +346,16 @@ def crawl(
                         print(f"      [WARN] 상세 페이지 실패 ({ext_id}): {e}")
                     db.upsert_job(job)
                     new_count += 1
+                    consecutive_existing = 0
                     print(f"      [NEW] {post['title'][:60]}")
 
-            print(f"    누적: 신규 {new_count}, 기존 {updated_count}")
+            print(f"    누적: 신규 {new_count}, 기존 {updated_count}"
+                  f"  (연속 기존 {consecutive_existing})")
+
+            if stop_threshold and consecutive_existing >= stop_threshold:
+                print(f"    [조기종료] 연속 기존 {consecutive_existing} >= {stop_threshold}"
+                      f" — page {page} 에서 중단")
+                break
 
         db.finish_crawl_run(run_id, new_count, updated_count)
 
