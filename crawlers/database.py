@@ -11,13 +11,12 @@ SQLite DB 관리 모듈
     db.init_schema()
 
     # 공고 저장 (이미 있으면 last_seen_at만 업데이트)
-    result = db.upsert_job({
+    db.upsert_job({
         "source": "camhr",
         "external_id": "10656655",
         "title": "Sales Executive",
         ...
     })
-    # result = "inserted" or "updated"
 
     # 통계 조회
     stats = db.get_stats()
@@ -95,37 +94,24 @@ class JobDatabase:
 
     def upsert_job(self, job):
         """
-        공고를 DB에 저장한다.
-        - (source, external_id) 조합이 없으면 INSERT
-        - 있으면 last_seen_at만 UPDATE
-
-        Returns: "inserted" 또는 "updated"
+        공고를 DB에 저장한다. (source, external_id) 가 처음이면 INSERT,
+        이미 있으면 last_seen_at 만 갱신. 단일 문으로 원자적으로 처리해
+        한 런 안에 같은 공고가 여러 번 들어와도 UNIQUE 충돌을 내지 않는다.
         """
         now = datetime.now().isoformat()
 
         with self.connect() as conn:
-            # 이미 존재하는지 확인
-            row = conn.execute(
-                "SELECT id FROM jobs WHERE source = ? AND external_id = ?",
-                (job["source"], job["external_id"])
-            ).fetchone()
-
-            if row:
-                # 업데이트: last_seen_at만 갱신
-                conn.execute(
-                    "UPDATE jobs SET last_seen_at = ? WHERE id = ?",
-                    (now, row["id"])
-                )
-                return "updated"
-            else:
-                # 신규 삽입
-                conn.execute("""
-                    INSERT INTO jobs (
-                        source, external_id, title, company, location, salary,
-                        job_type, pub_date, link, content, raw_data,
-                        first_seen_at, last_seen_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
+            conn.execute(
+                """
+                INSERT INTO jobs (
+                    source, external_id, title, company, location, salary,
+                    job_type, pub_date, link, content, raw_data,
+                    first_seen_at, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source, external_id) DO UPDATE SET
+                    last_seen_at = excluded.last_seen_at
+                """,
+                (
                     job["source"],
                     job["external_id"],
                     job.get("title", ""),
@@ -139,8 +125,8 @@ class JobDatabase:
                     json.dumps(job.get("raw_data", {}), ensure_ascii=False),
                     now,
                     now,
-                ))
-                return "inserted"
+                ),
+            )
 
     # ============================================================
     # 크롤링 실행 기록

@@ -303,7 +303,8 @@
     "pagination": {
       "type": "url_param",
       "param": "page",
-      "start": 1
+      "start": 1,
+      "max_pages": 5
     },
     "validated": true,
     "validation_report": {
