@@ -127,14 +127,43 @@ def _extract_date_hit(row, selectors: dict, parse_mode: str) -> tuple:
     return date, hit
 
 
-def _parse_detail_page(html: str, config: dict) -> str:
-    """상세 페이지 본문 추출 (selectors.content 가 지정된 경우만)."""
-    content_sel = config["source"]["selectors"].get("content")
+def _parse_detail_page(html: str, config: dict, detail_url: str = "",
+                       http_kwargs: Optional[dict] = None) -> str:
+    """상세 페이지 본문 추출.
+
+    selectors.content 로 본문을 뽑되, 매치 결과가 비어있고
+    selectors.content_iframe 이 설정돼 있으면 해당 iframe src 를
+    추가로 fetch 해 동일한 content selector 로 재시도한다.
+    (incruit 처럼 본문이 iframe 안에 있는 사이트 대응.)
+    """
+    selectors = config["source"]["selectors"]
+    content_sel = selectors.get("content")
     if not content_sel:
         return ""
+
     soup = BeautifulSoup(html, "lxml")
     tag = soup.select_one(content_sel)
-    return tag.get_text(separator="\n", strip=True) if tag else ""
+    if tag:
+        text = tag.get_text(separator="\n", strip=True)
+        if text:
+            return text
+
+    iframe_sel = selectors.get("content_iframe")
+    if iframe_sel and http_kwargs is not None:
+        iframe = soup.select_one(iframe_sel)
+        src = iframe.get("src") if iframe else None
+        if src:
+            base = detail_url or config["source"].get("base_url", "")
+            iframe_url = urljoin(base, src)
+            try:
+                iframe_html = fetch(iframe_url, **http_kwargs)
+            except Exception as e:
+                print(f"      [WARN] iframe follow 실패: {type(e).__name__}: {e}")
+                return ""
+            inner = BeautifulSoup(iframe_html, "lxml").select_one(content_sel)
+            if inner:
+                return inner.get_text(separator="\n", strip=True)
+    return ""
 
 
 def _extract_external_id(link: str, config: dict) -> str:
@@ -299,7 +328,9 @@ def crawl(
                 else:
                     try:
                         detail_html = fetch(post["link"], **http_kwargs)
-                        job["content"] = _parse_detail_page(detail_html, config)
+                        job["content"] = _parse_detail_page(
+                            detail_html, config, post["link"], http_kwargs,
+                        )
                         time.sleep(0.5)
                     except Exception as e:
                         print(f"      [WARN] 상세 페이지 실패 ({ext_id}): {e}")

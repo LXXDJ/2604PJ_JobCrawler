@@ -191,7 +191,8 @@
         "author": "div.cell_first > div.cl_top > a.cpname",
         "date": "div.cell_last > div.cl_btm > span:first-child",
         "hit": "unknown",
-        "content": "unknown"
+        "content": "#content_job",
+        "content_iframe": "iframe"
       },
       "parse_mode": "direct",
       "skip_row_if_has_class": []
@@ -341,7 +342,7 @@
         "author": "unknown",
         "date": "td.regDate",
         "hit": "unknown",
-        "content": "unknown"
+        "content": ".detail-content"
       },
       "parse_mode": "direct",
       "skip_row_if_has_class": []
@@ -386,7 +387,7 @@
         "author": "div.info > h2",
         "date": "div.region",
         "hit": null,
-        "content": null
+        "content": ".right_view"
       },
       "parse_mode": "direct",
       "skip_row_if_has_class": [
