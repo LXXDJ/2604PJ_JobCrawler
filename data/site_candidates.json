@@ -1,109 +1,576 @@
 [
-  {"category": "종합_포털", "name": "잡코리아", "url": "https://www.jobkorea.co.kr/recruit/joblist", "site_id": "jobkorea", "registered": true},
-  {"category": "종합_포털", "name": "사람인", "url": "https://www.saramin.co.kr/zf_user/jobs/list/job-category", "site_id": "saramin", "registered": true},
-  {"category": "종합_포털", "name": "인크루트", "url": "https://job.incruit.com/jobdb_list/searchjob.asp", "site_id": "incruit", "registered": true},
-  {"category": "종합_포털", "name": "원티드", "url": "https://www.wanted.co.kr/wdlist", "site_id": "wanted", "registered": true},
-  {"category": "종합_포털", "name": "잡플래닛", "url": "https://www.jobplanet.co.kr/job", "site_id": "jobplanet", "registered": true},
-  {"category": "종합_포털", "name": "로켓펀치", "url": "https://www.rocketpunch.com/jobs", "site_id": "rocketpunch", "registered": true},
-  {"category": "종합_포털", "name": "점핏", "url": "https://www.jumpit.co.kr/positions", "site_id": "jumpit", "registered": true},
-  {"category": "종합_포털", "name": "커리어", "url": "https://job.career.co.kr/jobs/", "site_id": "career", "registered": true},
-  {"category": "종합_포털", "name": "피플앤잡", "url": "https://www.peoplenjob.com/jobs", "site_id": "peoplenjob", "registered": true},
-  {"category": "종합_포털", "name": "하이브레인", "url": "https://www.hibrain.net/recruitment/categories/JOB/categories/EXP/recruits", "site_id": "hibrain", "registered": true},
-  {"category": "종합_포털", "name": "벼룩시장", "url": "https://www.findall.co.kr/job", "site_id": "findall", "registered": true},
-  {"category": "종합_포털", "name": "라디오코리아", "url": "https://www.radiokorea.com/community/jobs.php", "site_id": "radiokorea", "registered": true},
-  {"category": "종합_포털", "name": "뽐뿌 구인정보", "url": "https://www.ppomppu.co.kr/zboard/zboard.php?id=guin", "site_id": "ppomppu", "registered": true},
-  {"category": "종합_포털", "name": "알바천국", "url": "https://www.alba.co.kr/job/Main", "site_id": "alba", "registered": true},
-  {"category": "종합_포털", "name": "CamHR", "url": "https://www.camhr.com/", "site_id": "camhr", "registered": true},
-  {"category": "교민", "name": "재캄보디아한인회", "url": "http://www.hanin.or.kr/bbs/board.php?bo_table=Information", "site_id": "hanin", "registered": true},
-  {"category": "교민", "name": "시엠립한인회", "url": "https://siemreap.korean.net/bbs/board.php?bo_table=tb33", "site_id": "siemreap", "registered": true},
-
-  {"category": "종합_포털", "name": "캐치", "url": "https://www.catch.co.kr/", "note": "대졸 공채 중심 — JS SPA, 메인 URL 로 분석"},
-  {"category": "종합_포털", "name": "알바몬", "url": "https://www.albamon.com/", "note": "과거 GraphQL 필터옵션 오인식 — validator 강화로 재시도 가치"},
-  {"category": "종합_포털", "name": "교차로 구인구직 (서울)", "url": "https://work.seoulkcr.com/wanted/", "note": "/wanted/ 가 구인(회사→구직자) 방향, 루트는 구직 게시판이라 분리"},
-  {"category": "종합_포털", "name": "블라인드 하이어", "url": "https://www.teamblind.com/kr/", "note": "로그인 기반 — 수집 난이도 높음"},
-  {"category": "종합_포털", "name": "링크드인", "url": "https://www.linkedin.com/jobs/search/?location=South%20Korea", "skip": true, "skip_reason": "로그인 필수 + TOS 스크래핑 금지"},
-  {"category": "종합_포털", "name": "리멤버 채용", "url": "https://career.rememberapp.co.kr/", "skip": true, "skip_reason": "Cloudflare Access denied (IP/ASN 차단) — 수동 쿠키 주입 or residential proxy 필요"},
-  {"category": "종합_포털", "name": "자소설닷컴", "url": "https://jasoseol.com/recruit", "skip": true, "skip_reason": "Cloudflare Access denied (IP/ASN 차단)"},
-  {"category": "종합_포털", "name": "링커리어", "url": "https://linkareer.com/list/activity", "note": "과거 GraphQL 필터옵션 오인식 — 재시도"},
-  {"category": "종합_포털", "name": "슈퍼루키", "url": "https://www.superookie.com/", "skip": true, "skip_reason": "Cloudflare Access denied (IP/ASN 차단)"},
-  {"category": "종합_포털", "name": "멀티잡", "url": "https://www.multijob.co.kr/"},
-
-  {"category": "공공_지자체", "name": "고용24 / 워크넷", "url": "https://www.work24.go.kr/", "skip": true, "skip_reason": "OpenAPI 제공 — 스크래핑 비권장 (키 발급 후 REST 호출)"},
-  {"category": "공공_지자체", "name": "알리오", "url": "https://www.alio.go.kr/", "skip": true, "skip_reason": "OpenAPI (공공데이터포털) — 스크래핑 비권장"},
-  {"category": "공공_지자체", "name": "월드잡플러스", "url": "https://www.worldjob.or.kr/"},
-  {"category": "공공_지자체", "name": "서울일자리포털", "url": "https://job.seoul.go.kr/", "note": "CSV 의 seoul.jobportal.kr 보다 실제 도메인"},
-  {"category": "공공_지자체", "name": "부산일자리종합센터", "url": "https://www.busanjob.net/"},
-  {"category": "공공_지자체", "name": "경기잡아바", "url": "https://www.jobaba.net/"},
-  {"category": "공공_지자체", "name": "인천일자리포털", "url": "https://www.incheon.go.kr/"},
-  {"category": "공공_지자체", "name": "대구일자리포털", "url": "https://www.daegu.go.kr/"},
-  {"category": "공공_지자체", "name": "새일센터", "url": "https://saeil.mogef.go.kr/", "note": "경력단절여성"},
-  {"category": "공공_지자체", "name": "장애인고용공단", "url": "https://www.kead.or.kr/"},
-  {"category": "공공_지자체", "name": "KOTRA", "url": "https://www.kotra.or.kr/", "note": "해외 취업"},
-  {"category": "공공_지자체", "name": "KOICA", "url": "https://www.koica.go.kr/"},
-
-  {"category": "직군_특화", "name": "건설워커", "url": "https://www.worker.co.kr/", "note": "CSV 의 construction.co.kr 과 혼동 — 실사이트는 worker.co.kr"},
-  {"category": "직군_특화", "name": "디자인채용포털", "url": "https://www.designjob.co.kr/", "note": "도메인 실존 확인 필요"},
-  {"category": "직군_특화", "name": "콘텐츠채용포털", "url": "https://www.contentjob.co.kr/", "note": "도메인 실존 확인 필요"},
-  {"category": "직군_특화", "name": "외식·프랜차이즈", "url": "https://www.foodjob.co.kr/"},
-  {"category": "직군_특화", "name": "유통·물류", "url": "https://www.logisticsjob.co.kr/", "note": "도메인 실존 확인 필요"},
-  {"category": "직군_특화", "name": "교육·강사", "url": "https://www.teacherjob.co.kr/", "note": "도메인 실존 확인 필요"},
-  {"category": "직군_특화", "name": "의료·간호", "url": "https://www.medijob.co.kr/", "note": "medijob 가 실사이트"},
-  {"category": "직군_특화", "name": "해외·기술", "url": "https://www.overseajob.co.kr/", "note": "도메인 실존 확인 필요"},
-  {"category": "직군_특화", "name": "연구·전문직", "url": "https://www.researchjob.co.kr/", "note": "도메인 실존 확인 필요"},
-  {"category": "직군_특화", "name": "제조·생산", "url": "https://www.productionjob.co.kr/", "note": "도메인 실존 확인 필요"},
-  {"category": "직군_특화", "name": "게임잡", "url": "https://www.gamejob.co.kr/"},
-  {"category": "직군_특화", "name": "미디어잡", "url": "https://www.mediajob.co.kr/"},
-  {"category": "직군_특화", "name": "호텔잡", "url": "https://www.hoteljob.co.kr/"},
-  {"category": "직군_특화", "name": "티쳐빌", "url": "https://www.teacherville.co.kr/"},
-
-  {"category": "프리랜서", "name": "크몽", "url": "https://kmong.com/category"},
-  {"category": "프리랜서", "name": "숨고", "url": "https://soomgo.com/"},
-  {"category": "프리랜서", "name": "위시켓", "url": "https://www.wishket.com/project/"},
-  {"category": "프리랜서", "name": "탤런트뱅크", "url": "https://www.talentbank.co.kr/"},
-  {"category": "프리랜서", "name": "프리모아", "url": "https://www.freemoa.net/"},
-  {"category": "프리랜서", "name": "오투잡", "url": "https://www.otwojob.com/"},
-  {"category": "프리랜서", "name": "이랜서", "url": "https://www.elancer.co.kr/"},
-  {"category": "프리랜서", "name": "탈잉", "url": "https://taling.me/", "note": "취미 클래스 중심 — 구인 범주 애매"},
-  {"category": "프리랜서", "name": "프립", "url": "https://www.frip.co.kr/", "note": "여가 클래스 중심 — 구인 범주 애매"},
-
-  {"category": "대기업_채용", "name": "삼성", "url": "https://www.samsungcareers.com/"},
-  {"category": "대기업_채용", "name": "LG", "url": "https://careers.lge.com/"},
-  {"category": "대기업_채용", "name": "SK", "url": "https://www.skcareers.com/"},
-  {"category": "대기업_채용", "name": "현대차", "url": "https://careers.hyundai.com/"},
-  {"category": "대기업_채용", "name": "기아", "url": "https://careers.kia.com/"},
-  {"category": "대기업_채용", "name": "롯데", "url": "https://job.lotte.co.kr/"},
-  {"category": "대기업_채용", "name": "한화", "url": "https://www.hanwha.co.kr/careers/"},
-  {"category": "대기업_채용", "name": "CJ", "url": "https://recruit.cj.net/"},
-  {"category": "대기업_채용", "name": "KT", "url": "https://recruit.kt.com/"},
-  {"category": "대기업_채용", "name": "포스코", "url": "https://recruit.posco.com/"},
-  {"category": "대기업_채용", "name": "네이버", "url": "https://recruit.navercorp.com/rcrt/loadJobList.do"},
-  {"category": "대기업_채용", "name": "카카오", "url": "https://careers.kakao.com/jobs"},
-  {"category": "대기업_채용", "name": "쿠팡", "url": "https://www.coupang.jobs/kr/"},
-  {"category": "대기업_채용", "name": "우아한형제들", "url": "https://www.woowahan.com/jobs"},
-  {"category": "대기업_채용", "name": "토스", "url": "https://toss.im/career/jobs"},
-  {"category": "대기업_채용", "name": "당근", "url": "https://about.daangn.com/jobs/"},
-  {"category": "대기업_채용", "name": "라인", "url": "https://careers.linecorp.com/ko/jobs"},
-  {"category": "대기업_채용", "name": "넥슨", "url": "https://career.nexon.com/user/recruit/member/postList"},
-  {"category": "대기업_채용", "name": "엔씨소프트", "url": "https://careers.ncsoft.com/"},
-  {"category": "대기업_채용", "name": "크래프톤", "url": "https://careers.krafton.com/jobs"},
-  {"category": "대기업_채용", "name": "스마일게이트", "url": "https://careers.smilegate.com/"},
-
-  {"category": "커뮤니티", "name": "클리앙 구인구직", "url": "https://www.clien.net/service/board/recruit"},
-  {"category": "커뮤니티", "name": "루리웹 알바", "url": "https://bbs.ruliweb.com/community/board/300012"},
-  {"category": "커뮤니티", "name": "디시 알바갤", "url": "https://gall.dcinside.com/board/lists/?id=alba"},
-  {"category": "커뮤니티", "name": "82cook 구인구직", "url": "https://www.82cook.com/"},
-  {"category": "커뮤니티", "name": "네이트판", "url": "https://pann.nate.com/", "note": "순수 구인 게시판 아님 — 배제 후보"},
-
-  {"category": "교민", "name": "헤이코리안", "url": "https://www.heykorean.com/"},
-  {"category": "교민", "name": "호주나라", "url": "https://www.hojunara.com/"},
-  {"category": "교민", "name": "미주중앙일보", "url": "https://www.koreadaily.com/"},
-  {"category": "교민", "name": "밴쿠버코리아", "url": "https://www.vankorean.com/"},
-  {"category": "교민", "name": "일본한인", "url": "https://japan.or.kr/"},
-  {"category": "교민", "name": "보스턴한인", "url": "https://www.koreaboston.com/"},
-  {"category": "교민", "name": "북경한인", "url": "https://www.beijingkorea.com/"},
-  {"category": "교민", "name": "시드니한인", "url": "https://www.sydneyhan.com/"},
-  {"category": "교민", "name": "베트남한인", "url": "https://www.vietnamhani.com/"},
-  {"category": "교민", "name": "세부한인", "url": "https://www.cebuhanin.com/"},
-  {"category": "교민", "name": "하와이한인", "url": "https://www.hawaiihanin.com/"},
-  {"category": "교민", "name": "홍콩한인", "url": "https://www.hongkonghanin.org/"}
+  {
+    "category": "종합_포털",
+    "name": "잡코리아",
+    "url": "https://www.jobkorea.co.kr/recruit/joblist",
+    "site_id": "jobkorea",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "사람인",
+    "url": "https://www.saramin.co.kr/zf_user/jobs/list/job-category",
+    "site_id": "saramin",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "인크루트",
+    "url": "https://job.incruit.com/jobdb_list/searchjob.asp",
+    "site_id": "incruit",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "원티드",
+    "url": "https://www.wanted.co.kr/wdlist",
+    "site_id": "wanted",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "잡플래닛",
+    "url": "https://www.jobplanet.co.kr/job",
+    "site_id": "jobplanet",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "로켓펀치",
+    "url": "https://www.rocketpunch.com/jobs",
+    "site_id": "rocketpunch",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "점핏",
+    "url": "https://www.jumpit.co.kr/positions",
+    "site_id": "jumpit",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "커리어",
+    "url": "https://job.career.co.kr/jobs/",
+    "site_id": "career",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "피플앤잡",
+    "url": "https://www.peoplenjob.com/jobs",
+    "site_id": "peoplenjob",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "하이브레인",
+    "url": "https://www.hibrain.net/recruitment/categories/JOB/categories/EXP/recruits",
+    "site_id": "hibrain",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "벼룩시장",
+    "url": "https://www.findall.co.kr/job",
+    "site_id": "findall",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "라디오코리아",
+    "url": "https://www.radiokorea.com/community/jobs.php",
+    "site_id": "radiokorea",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "뽐뿌 구인정보",
+    "url": "https://www.ppomppu.co.kr/zboard/zboard.php?id=guin",
+    "site_id": "ppomppu",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "알바천국",
+    "url": "https://www.alba.co.kr/job/Main",
+    "site_id": "alba",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "CamHR",
+    "url": "https://www.camhr.com/",
+    "site_id": "camhr",
+    "registered": true
+  },
+  {
+    "category": "교민",
+    "name": "재캄보디아한인회",
+    "url": "http://www.hanin.or.kr/bbs/board.php?bo_table=Information",
+    "site_id": "hanin",
+    "registered": true
+  },
+  {
+    "category": "교민",
+    "name": "시엠립한인회",
+    "url": "https://siemreap.korean.net/bbs/board.php?bo_table=tb33",
+    "site_id": "siemreap",
+    "registered": true
+  },
+  {
+    "category": "종합_포털",
+    "name": "캐치",
+    "url": "https://www.catch.co.kr/",
+    "note": "대졸 공채 중심 — JS SPA, 메인 URL 로 분석"
+  },
+  {
+    "category": "종합_포털",
+    "name": "알바몬",
+    "url": "https://www.albamon.com/",
+    "note": "과거 GraphQL 필터옵션 오인식 — validator 강화로 재시도 가치"
+  },
+  {
+    "category": "종합_포털",
+    "name": "교차로 구인구직 (서울)",
+    "url": "https://work.seoulkcr.com/wanted/",
+    "note": "/wanted/ 가 구인(회사→구직자) 방향, 루트는 구직 게시판이라 분리"
+  },
+  {
+    "category": "종합_포털",
+    "name": "블라인드 하이어",
+    "url": "https://www.teamblind.com/kr/",
+    "note": "로그인 기반 — 수집 난이도 높음"
+  },
+  {
+    "category": "종합_포털",
+    "name": "링크드인",
+    "url": "https://www.linkedin.com/jobs/search/?location=South%20Korea",
+    "skip": true,
+    "skip_reason": "로그인 필수 + TOS 스크래핑 금지"
+  },
+  {
+    "category": "종합_포털",
+    "name": "리멤버 채용",
+    "url": "https://career.rememberapp.co.kr/",
+    "skip": true,
+    "skip_reason": "Cloudflare Access denied (IP/ASN 차단) — 수동 쿠키 주입 or residential proxy 필요"
+  },
+  {
+    "category": "종합_포털",
+    "name": "자소설닷컴",
+    "url": "https://jasoseol.com/recruit",
+    "skip": true,
+    "skip_reason": "Cloudflare Access denied (IP/ASN 차단)"
+  },
+  {
+    "category": "종합_포털",
+    "name": "링커리어",
+    "url": "https://linkareer.com/list/activity",
+    "note": "과거 GraphQL 필터옵션 오인식 — 재시도"
+  },
+  {
+    "category": "종합_포털",
+    "name": "슈퍼루키",
+    "url": "https://www.superookie.com/",
+    "skip": true,
+    "skip_reason": "Cloudflare Access denied (IP/ASN 차단)"
+  },
+  {
+    "category": "종합_포털",
+    "name": "멀티잡",
+    "url": "https://www.multijob.co.kr/"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "고용24 / 워크넷",
+    "url": "https://www.work24.go.kr/",
+    "skip": true,
+    "skip_reason": "OpenAPI 제공 — 스크래핑 비권장 (키 발급 후 REST 호출)"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "알리오",
+    "url": "https://www.alio.go.kr/",
+    "skip": true,
+    "skip_reason": "OpenAPI (공공데이터포털) — 스크래핑 비권장"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "월드잡플러스",
+    "url": "https://www.worldjob.or.kr/"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "서울일자리포털",
+    "url": "https://job.seoul.go.kr/",
+    "note": "CSV 의 seoul.jobportal.kr 보다 실제 도메인"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "부산일자리종합센터",
+    "url": "https://www.busanjob.net/"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "경기잡아바",
+    "url": "https://www.jobaba.net/"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "인천일자리포털",
+    "url": "https://www.incheon.go.kr/"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "대구일자리포털",
+    "url": "https://www.daegu.go.kr/"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "새일센터",
+    "url": "https://saeil.mogef.go.kr/",
+    "note": "경력단절여성"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "장애인고용공단",
+    "url": "https://www.kead.or.kr/"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "KOTRA",
+    "url": "https://www.kotra.or.kr/",
+    "note": "해외 취업"
+  },
+  {
+    "category": "공공_지자체",
+    "name": "KOICA",
+    "url": "https://www.koica.go.kr/"
+  },
+  {
+    "category": "직군_특화",
+    "name": "건설워커",
+    "url": "https://www.worker.co.kr/",
+    "note": "CSV 의 construction.co.kr 과 혼동 — 실사이트는 worker.co.kr"
+  },
+  {
+    "category": "직군_특화",
+    "name": "디자인채용포털",
+    "url": "https://www.designjob.co.kr/",
+    "note": "도메인 실존 확인 필요"
+  },
+  {
+    "category": "직군_특화",
+    "name": "콘텐츠채용포털",
+    "url": "https://www.contentjob.co.kr/",
+    "note": "도메인 실존 확인 필요"
+  },
+  {
+    "category": "직군_특화",
+    "name": "외식·프랜차이즈",
+    "url": "https://www.foodjob.co.kr/"
+  },
+  {
+    "category": "직군_특화",
+    "name": "유통·물류",
+    "url": "https://www.logisticsjob.co.kr/",
+    "note": "도메인 실존 확인 필요"
+  },
+  {
+    "category": "직군_특화",
+    "name": "교육·강사",
+    "url": "https://www.teacherjob.co.kr/",
+    "note": "도메인 실존 확인 필요"
+  },
+  {
+    "category": "직군_특화",
+    "name": "의료·간호",
+    "url": "https://www.medijob.co.kr/",
+    "note": "medijob 가 실사이트"
+  },
+  {
+    "category": "직군_특화",
+    "name": "해외·기술",
+    "url": "https://www.overseajob.co.kr/",
+    "note": "도메인 실존 확인 필요"
+  },
+  {
+    "category": "직군_특화",
+    "name": "연구·전문직",
+    "url": "https://www.researchjob.co.kr/",
+    "note": "도메인 실존 확인 필요"
+  },
+  {
+    "category": "직군_특화",
+    "name": "제조·생산",
+    "url": "https://www.productionjob.co.kr/",
+    "note": "도메인 실존 확인 필요"
+  },
+  {
+    "category": "직군_특화",
+    "name": "게임잡",
+    "url": "https://www.gamejob.co.kr/"
+  },
+  {
+    "category": "직군_특화",
+    "name": "미디어잡",
+    "url": "https://www.mediajob.co.kr/"
+  },
+  {
+    "category": "직군_특화",
+    "name": "호텔잡",
+    "url": "https://www.hoteljob.co.kr/"
+  },
+  {
+    "category": "직군_특화",
+    "name": "티쳐빌",
+    "url": "https://www.teacherville.co.kr/"
+  },
+  {
+    "category": "프리랜서",
+    "name": "크몽",
+    "url": "https://kmong.com/category"
+  },
+  {
+    "category": "프리랜서",
+    "name": "숨고",
+    "url": "https://soomgo.com/"
+  },
+  {
+    "category": "프리랜서",
+    "name": "위시켓",
+    "url": "https://www.wishket.com/project/"
+  },
+  {
+    "category": "프리랜서",
+    "name": "탤런트뱅크",
+    "url": "https://www.talentbank.co.kr/"
+  },
+  {
+    "category": "프리랜서",
+    "name": "프리모아",
+    "url": "https://www.freemoa.net/"
+  },
+  {
+    "category": "프리랜서",
+    "name": "오투잡",
+    "url": "https://www.otwojob.com/"
+  },
+  {
+    "category": "프리랜서",
+    "name": "이랜서",
+    "url": "https://www.elancer.co.kr/"
+  },
+  {
+    "category": "프리랜서",
+    "name": "탈잉",
+    "url": "https://taling.me/",
+    "note": "취미 클래스 중심 — 구인 범주 애매"
+  },
+  {
+    "category": "프리랜서",
+    "name": "프립",
+    "url": "https://www.frip.co.kr/",
+    "note": "여가 클래스 중심 — 구인 범주 애매"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "삼성",
+    "url": "https://www.samsungcareers.com/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "LG",
+    "url": "https://careers.lge.com/",
+    "skip": true,
+    "skip_reason": "LG careers 공식 서브도메인 DNS/Timeout 모두 실패 — 정확한 URL 미확정"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "SK",
+    "url": "https://www.skcareers.com/",
+    "skip": true,
+    "skip_reason": "실제 공고 아닌 사업부 카테고리 (Advanced Materials/Green/Digital)"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "현대차",
+    "url": "https://talent.hyundai.com/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "기아",
+    "url": "https://recruit.kia.com/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "롯데",
+    "url": "https://job.lotte.co.kr/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "한화",
+    "url": "https://www.hanwha.co.kr/careers/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "CJ",
+    "url": "https://recruit.cj.net/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "KT",
+    "url": "https://recruit.kt.com/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "포스코",
+    "url": "https://recruit.posco.com/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "네이버",
+    "url": "https://recruit.navercorp.com/rcrt/loadJobList.do"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "카카오",
+    "url": "https://careers.kakao.com/jobs"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "쿠팡",
+    "url": "https://www.coupang.jobs/kr/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "우아한형제들",
+    "url": "https://www.woowahan.com/jobs"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "토스",
+    "url": "https://toss.im/career/jobs"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "당근",
+    "url": "https://about.daangn.com/jobs/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "라인",
+    "url": "https://careers.linecorp.com/ko/jobs"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "넥슨",
+    "url": "https://careers.nexon.com/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "엔씨소프트",
+    "url": "https://careers.ncsoft.com/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "크래프톤",
+    "url": "https://krafton.com/careers/"
+  },
+  {
+    "category": "대기업_채용",
+    "name": "스마일게이트",
+    "url": "https://careers.smilegate.com/"
+  },
+  {
+    "category": "커뮤니티",
+    "name": "클리앙 구인구직",
+    "url": "https://www.clien.net/service/board/recruit"
+  },
+  {
+    "category": "커뮤니티",
+    "name": "루리웹 알바",
+    "url": "https://bbs.ruliweb.com/community/board/300012"
+  },
+  {
+    "category": "커뮤니티",
+    "name": "디시 알바갤",
+    "url": "https://gall.dcinside.com/board/lists/?id=alba"
+  },
+  {
+    "category": "커뮤니티",
+    "name": "82cook 구인구직",
+    "url": "https://www.82cook.com/",
+    "skip": true,
+    "skip_reason": "요리 레시피 게시판 — 구인 아님"
+  },
+  {
+    "category": "커뮤니티",
+    "name": "네이트판",
+    "url": "https://pann.nate.com/",
+    "note": "순수 구인 게시판 아님 — 배제 후보",
+    "skip": true,
+    "skip_reason": "일반 게시글 — 구인 아님"
+  },
+  {
+    "category": "교민",
+    "name": "헤이코리안",
+    "url": "https://www.heykorean.com/"
+  },
+  {
+    "category": "교민",
+    "name": "호주나라",
+    "url": "https://www.hojunara.com/"
+  },
+  {
+    "category": "교민",
+    "name": "미주중앙일보",
+    "url": "https://www.koreadaily.com/"
+  },
+  {
+    "category": "교민",
+    "name": "밴쿠버코리아",
+    "url": "https://www.vankorean.com/"
+  },
+  {
+    "category": "교민",
+    "name": "일본한인",
+    "url": "https://japan.or.kr/"
+  },
+  {
+    "category": "교민",
+    "name": "보스턴한인",
+    "url": "https://www.koreaboston.com/"
+  },
+  {
+    "category": "교민",
+    "name": "북경한인",
+    "url": "https://www.beijingkorea.com/"
+  },
+  {
+    "category": "교민",
+    "name": "시드니한인",
+    "url": "https://www.sydneyhan.com/"
+  },
+  {
+    "category": "교민",
+    "name": "베트남한인",
+    "url": "https://www.vietnamhani.com/"
+  },
+  {
+    "category": "교민",
+    "name": "세부한인",
+    "url": "https://www.cebuhanin.com/"
+  },
+  {
+    "category": "교민",
+    "name": "하와이한인",
+    "url": "https://www.hawaiihanin.com/"
+  },
+  {
+    "category": "교민",
+    "name": "홍콩한인",
+    "url": "https://www.hongkonghanin.org/"
+  }
 ]

@@ -34,6 +34,11 @@ SITE_LABELS = {
     "kakao": "카카오 채용",
     "daangn": "당근 채용",
     "linecorp": "라인 채용",
+    "seoul": "서울일자리포털",
+    "kotra": "KOTRA",
+    "gamejob": "게임잡",
+    "mediajob": "미디어잡",
+    "freemoa": "프리모아",
 }
 
 

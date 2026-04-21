@@ -332,6 +332,7 @@ class LLMStrategy(AnalysisStrategy):
                 timeout=self.timeout,
                 max_retries=1,
                 cf_bypass_on_403=True,
+                use_stealth_on_fail=True,
             ), ""
         except Exception as e:
             return None, f"{type(e).__name__}: {e}"

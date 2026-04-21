@@ -54,6 +54,7 @@ def fetch(
     verify_ssl: bool = False,
     return_json: bool = False,
     cf_bypass_on_403: bool = False,
+    use_stealth_on_fail: bool = False,
 ):
     """
     HTTP GET 요청 + 자동 재시도. 내부적으로 curl_cffi 의 Chrome impersonate 사용.
@@ -62,6 +63,10 @@ def fetch(
              쿠키를 넘길 때 사용.
     cf_bypass_on_403: True 면 첫 403 응답시 Playwright 로 쿠키 워밍업 후 재시도 1회.
                      리멤버·자소설 같은 Cloudflare WAF 뒤 사이트에서 유효.
+    use_stealth_on_fail: True 면 curl_cffi 완전 실패 (DNS/SSL/Timeout/403 모두) 시
+                     최후 폴백으로 scrapling StealthyFetcher 로 HTML 재수집.
+                     LG careers.lge.com (DNS), 멀티잡 (SSL), 캐치 (SPA) 등 대응.
+                     return_json=True 일 땐 무시 (JSON API 는 브라우저 경유 무의미).
 
     Returns: response.text (기본) 또는 response.json() (return_json=True)
 
@@ -115,7 +120,25 @@ def fetch(
                         cookies = {**(cookies or {}), **warmed}
                         print(f"      [CF bypass] 쿠키 {len(warmed)}개 획득 — 재시도")
                         continue
-                    print(f"      [CF bypass] 워밍업 실패 — 원본 403 그대로 raise")
+                    print(f"      [CF bypass] 워밍업 실패")
+                # HTTP 에러지만 use_stealth_on_fail=True 면 StealthyFetcher 폴백
+                # (403 외에도 404/500 등에서 SPA 가 실제로는 렌더되는 경우가 있음)
+                if use_stealth_on_fail and not return_json:
+                    try:
+                        from stealth_fetcher import fetch_html as _stealth_fetch
+                    except ImportError:
+                        from crawlers.stealth_fetcher import fetch_html as _stealth_fetch
+                    try:
+                        print(f"      [stealth] HTTP {status} — StealthyFetcher 폴백 시도")
+                        html = _stealth_fetch(
+                            url,
+                            timeout=max(timeout * 1000, 30000),
+                            cookies=cookies,
+                        )
+                        print(f"      [stealth] 성공 (body {len(html)}자)")
+                        return html
+                    except Exception as se:
+                        print(f"      [stealth] 폴백 실패: {type(se).__name__}: {str(se)[:150]}")
                 # 일반 4xx/5xx 는 재시도해도 같은 결과 → 즉시 중단
                 raise
 
@@ -125,5 +148,25 @@ def fetch(
 
         if attempt < max_retries:
             time.sleep(retry_backoff * attempt)
+
+    # 마지막 폴백 — use_stealth_on_fail=True 면 StealthyFetcher (Chromium) 로 한 번 더.
+    # DNS/SSL/Timeout 같은 curl_cffi 한계 우회 + SPA 완전 렌더까지 한 번에.
+    # JSON API 는 제외 — 브라우저 경유한다고 JSON 파싱이 달라지지 않음.
+    if use_stealth_on_fail and not return_json:
+        try:
+            from stealth_fetcher import fetch_html as _stealth_fetch
+        except ImportError:
+            from crawlers.stealth_fetcher import fetch_html as _stealth_fetch
+        try:
+            print(f"      [stealth] curl_cffi 실패 — StealthyFetcher 폴백 시도")
+            html = _stealth_fetch(
+                url,
+                timeout=max(timeout * 1000, 30000),
+                cookies=cookies,
+            )
+            print(f"      [stealth] 성공 (body {len(html)}자)")
+            return html
+        except Exception as e:
+            print(f"      [stealth] 폴백 실패: {type(e).__name__}: {str(e)[:150]}")
 
     raise last_exception

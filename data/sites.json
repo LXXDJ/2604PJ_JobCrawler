@@ -1147,5 +1147,271 @@
         "LINE Taiwan_Senior Strategic Business Development Manager"
       ]
     }
+  },
+  {
+    "site_id": "seoul",
+    "url": "https://job.seoul.go.kr/",
+    "site_type": "api_discovered",
+    "added_at": "2026-04-21T07:33:58.828747+00:00",
+    "extraction_method": "api",
+    "requires_render": false,
+    "source": {
+      "api_endpoint": "https://job.seoul.go.kr/hmpg/main/rsmgList.json",
+      "method": "POST",
+      "base_url": "https://job.seoul.go.kr",
+      "request_headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "referer": "https://job.seoul.go.kr/hmpg/main/main.do?sso=ok",
+        "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
+        "sec-ch-ua-mobile": "?0",
+        "x-requested-with": "XMLHttpRequest",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "accept": "application/json, text/javascript, */*; q=0.01",
+        "content-type": "application/x-www-form-urlencoded; charset=UTF-8"
+      },
+      "list_params": {},
+      "item_path": "dataList"
+    },
+    "pagination": {
+      "type": "api_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 10,
+      "fields_matched": {
+        "title": 10,
+        "second_signal": 10
+      },
+      "sample_titles": [
+        "아이들을 사랑하는 담임교사를 모집합니다.",
+        "생산직 사원 모집",
+        "간호조무사구합니다"
+      ]
+    }
+  },
+  {
+    "site_id": "kotra",
+    "url": "https://www.kotra.or.kr/",
+    "site_type": "static_html",
+    "added_at": "2026-04-21T07:35:02.770588+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://www.kotra.or.kr/",
+      "list_params": {},
+      "base_url": "https://www.kotra.or.kr",
+      "selectors": {
+        "list_rows": ".tab-data-list.dataList > li",
+        "subject_link": "a > p.tab-data-tit",
+        "author": "",
+        "date": "span.date",
+        "hit": "",
+        "content": ""
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 12,
+      "fields_matched": {
+        "title": 12,
+        "date": 12
+      },
+      "sample_titles": [
+        "New신규 게시물공지사항 탭 KOTRA 기술지원 임치지원 사업 기업 공모(2차)",
+        "해외 취업 사기 관련 유의사항 안내",
+        "해외인증 트렌드 2025 행사 안내"
+      ],
+      "retry_history": [
+        {
+          "attempt": 1,
+          "input_reason": "(첫 시도 실패 사유)",
+          "proposed_selectors": {
+            "list_rows": ".tab-data-list.dataList > li",
+            "subject_link": "a > p.tab-data-tit",
+            "author": "",
+            "date": "span.date",
+            "hit": "",
+            "content": ""
+          },
+          "llm_reasoning": "list_rows 를 '.tab-data-list.dataList > li' 로 수정하여 실제로 존재하는 공지사항 항목을 정확히 선택하게 되었습니다.",
+          "outcome": "ok",
+          "new_reason": ""
+        }
+      ]
+    }
+  },
+  {
+    "site_id": "gamejob",
+    "url": "https://www.gamejob.co.kr/",
+    "site_type": "static_html",
+    "added_at": "2026-04-21T07:36:52.013461+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://www.gamejob.co.kr/",
+      "list_params": {},
+      "base_url": "https://www.gamejob.co.kr",
+      "selectors": {
+        "list_rows": "ul.list > li",
+        "subject_link": "a",
+        "author": null,
+        "date": null,
+        "hit": null,
+        "content": null
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 56,
+      "fields_matched": {
+        "title": 36
+      },
+      "sample_titles": [
+        "넷마블넥서스",
+        "넷마블넥서스",
+        "트리노드 주식회사"
+      ]
+    }
+  },
+  {
+    "site_id": "mediajob",
+    "url": "https://www.mediajob.co.kr/",
+    "site_type": "static_html",
+    "added_at": "2026-04-21T07:38:23.748722+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://www.mediajob.co.kr/",
+      "list_params": {},
+      "base_url": "https://www.mediajob.co.kr",
+      "selectors": {
+        "list_rows": ".wrap_recruit .list .box",
+        "subject_link": ".subject a.link",
+        "author": "",
+        "date": "",
+        "hit": "",
+        "content": ""
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 138,
+      "fields_matched": {
+        "title": 132
+      },
+      "sample_titles": [
+        "브랜드 마케터 경력사용 채용",
+        "2026년 편성팀 방송지원직 육아휴직대체자 사원 채용",
+        "드라마제작센터 드라마&AI 프로듀서 계약직 사원 모집"
+      ],
+      "retry_history": [
+        {
+          "attempt": 1,
+          "input_reason": "(첫 시도 실패 사유)",
+          "proposed_selectors": {
+            "list_rows": ".wrap_recruit .wrap_rec .box",
+            "subject_link": "span.subject a.link",
+            "author": "",
+            "date": "",
+            "hit": "",
+            "content": ""
+          },
+          "llm_reasoning": "list_rows 에서 공고가 포함된 div 내의 box 클래스를 사용하여 정확한 공고를 찾도록 수정하였다.",
+          "outcome": "fail",
+          "new_reason": "list_rows 매칭 0개 (< 2)"
+        },
+        {
+          "attempt": 2,
+          "input_reason": "(첫 시도 실패 사유)",
+          "proposed_selectors": {
+            "list_rows": ".wrap_recruit .list .box",
+            "subject_link": ".subject a.link",
+            "author": "",
+            "date": "",
+            "hit": "",
+            "content": ""
+          },
+          "llm_reasoning": "선택자를 수정하여 list_rows와 subject_link가 잘 매칭되도록 업데이트했습니다.",
+          "outcome": "ok",
+          "new_reason": ""
+        }
+      ]
+    }
+  },
+  {
+    "site_id": "freemoa",
+    "url": "https://www.freemoa.net/",
+    "site_type": "static_html",
+    "added_at": "2026-04-21T07:40:22.865577+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://www.freemoa.net/",
+      "list_params": {},
+      "base_url": "https://www.freemoa.net",
+      "selectors": {
+        "list_rows": ".estimateCardWrap .estimateCard",
+        "subject_link": ".estimateCard .title",
+        "author": "unknown",
+        "date": "unknown",
+        "hit": "unknown",
+        "content": "unknown"
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 32,
+      "fields_matched": {
+        "title": 32,
+        "author": 0,
+        "date": 0,
+        "hit": 0
+      },
+      "sample_titles": [
+        "사용자간 직거래 몰 React Native 앱 개발",
+        "간단한 병원 지점별 관리 및 정보제공 앱 개발(Android, IOS)",
+        "요트투어 중개 플랫폼 Hybrid 앱개발"
+      ]
+    }
   }
 ]
