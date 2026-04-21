@@ -883,5 +883,135 @@
         "식자재업체 배송직 구함 정직원(차량지원) 월330만이상 밤12시-오전09시현지퇴근(휴게시간1시간) / 지입기사님 별도구함/인근거주자환영"
       ]
     }
+  },
+  {
+    "site_id": "samsungcareers",
+    "url": "https://www.samsungcareers.com/",
+    "site_type": "static_html",
+    "added_at": "2026-04-21T07:13:24.333268+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://www.samsungcareers.com/",
+      "list_params": {},
+      "base_url": "https://www.samsungcareers.com",
+      "selectors": {
+        "list_rows": "ul li",
+        "subject_link": "a",
+        "author": null,
+        "date": null,
+        "hit": null,
+        "content": null
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 54,
+      "fields_matched": {
+        "title": 52
+      },
+      "sample_titles": [
+        "삼성전자 DX부문",
+        "삼성전자 DS부문",
+        "삼성디스플레이"
+      ]
+    }
+  },
+  {
+    "site_id": "kt",
+    "url": "https://recruit.kt.com/",
+    "site_type": "api_discovered",
+    "added_at": "2026-04-21T07:14:04.419440+00:00",
+    "extraction_method": "api",
+    "requires_render": false,
+    "source": {
+      "api_endpoint": "https://recruit.kt.com/api/recruit",
+      "method": "GET",
+      "base_url": "https://recruit.kt.com",
+      "request_headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "referer": "https://recruit.kt.com/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
+        "sec-ch-ua-mobile": "?0"
+      },
+      "list_params": {
+        "isPost": "1",
+        "isInprogress": "1",
+        "isContainsContents": "0"
+      },
+      "item_path": "data"
+    },
+    "pagination": {
+      "type": "api_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 44,
+      "fields_matched": {
+        "title": 43,
+        "second_signal": 44
+      },
+      "sample_titles": [
+        "'26년 4월 대전권역 kt Engineer 신입/경력사원 채용",
+        "'26년 4월 신입/경력사원 채용 장애인/보훈 전형",
+        "'26년 4월 신입/경력사원 채용"
+      ]
+    }
+  },
+  {
+    "site_id": "coupang",
+    "url": "https://www.coupang.jobs/kr/",
+    "site_type": "static_html",
+    "added_at": "2026-04-21T07:14:46.360703+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://www.coupang.jobs/kr/",
+      "list_params": {},
+      "base_url": "https://www.coupang.jobs",
+      "selectors": {
+        "list_rows": ".card.card-job",
+        "subject_link": "h2.card-title a.stretched-link",
+        "author": null,
+        "date": null,
+        "hit": null,
+        "content": null
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 6,
+      "fields_matched": {
+        "title": 6
+      },
+      "sample_titles": [
+        "[쿠팡CLS] Senior Business analyst(EHS)",
+        "[쿠팡] 로켓배송 직매입 MD/브랜드매니저 채용 (과일)",
+        "Staff, Back-end engineer (WMS Inbound)"
+      ]
+    }
   }
 ]

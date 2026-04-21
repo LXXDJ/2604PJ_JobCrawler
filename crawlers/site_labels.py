@@ -28,6 +28,9 @@ SITE_LABELS = {
     "hibrain": "하이브레인",
     "albamon": "알바몬",
     "seoulkcr": "서울교차로",
+    "samsungcareers": "삼성 채용",
+    "kt": "KT 채용",
+    "coupang": "쿠팡 채용",
 }
 
 
