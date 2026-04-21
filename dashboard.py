@@ -17,6 +17,24 @@ import streamlit as st
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(ROOT, "data", "jobs.db")
 
+# site_id → 사용자 노출용 한글 라벨. DB 의 source 컬럼은 그대로 두고 표시만 변환.
+SITE_LABELS = {
+    "hanin": "재캄보디아한인회",
+    "siemreap": "시엠립한인회",
+    "camhr": "CamHR",
+    "jobkorea": "잡코리아",
+    "incruit": "인크루트",
+    "wanted": "원티드",
+    "ppomppu": "뽐뿌 구인정보",
+    "alba": "알바천국",
+    "radiokorea": "라디오코리아",
+}
+
+
+def label(sid: str) -> str:
+    return SITE_LABELS.get(sid, sid)
+
+
 st.set_page_config(page_title="JobCrawler Dashboard", layout="wide")
 
 
@@ -37,6 +55,7 @@ def load_runs() -> pd.DataFrame:
     df["status"] = df["error"].apply(
         lambda e: "ok" if (pd.isna(e) or not str(e).strip()) else "error"
     )
+    df["site"] = df["source"].map(label)
     return df
 
 
@@ -49,6 +68,8 @@ def load_jobs_summary() -> pd.DataFrame:
             "FROM jobs GROUP BY source ORDER BY total DESC",
             conn,
         )
+    if not df.empty:
+        df["site"] = df["source"].map(label)
     return df
 
 
@@ -63,6 +84,7 @@ def load_jobs_daily() -> pd.DataFrame:
         )
     if not df.empty:
         df["date"] = pd.to_datetime(df["date"])
+        df["site"] = df["source"].map(label)
     return df
 
 
@@ -119,10 +141,10 @@ with col_left:
         fig = px.bar(
             jobs,
             x="total",
-            y="source",
+            y="site",
             orientation="h",
             text="total",
-            labels={"total": "공고 수", "source": ""},
+            labels={"total": "공고 수", "site": ""},
         )
         fig.update_layout(yaxis={"categoryorder": "total ascending"}, height=400)
         fig.update_traces(textposition="outside")
@@ -140,8 +162,8 @@ with col_right:
             recent,
             x="date",
             y="new_jobs",
-            color="source",
-            labels={"new_jobs": "신규 공고", "date": "날짜"},
+            color="site",
+            labels={"new_jobs": "신규 공고", "date": "날짜", "site": ""},
             barmode="stack",
         )
         fig.update_layout(height=400, legend_title="")
@@ -163,13 +185,13 @@ else:
 
     # 하루에 여러 run 이 있으면 합산
     agg = (
-        recent_runs.groupby(["date", "source"], as_index=False)
+        recent_runs.groupby(["date", "site"], as_index=False)
         .agg(new_count=("new_count", "sum"), updated_count=("updated_count", "sum"),
              errors=("status", lambda s: (s == "error").sum()))
     )
     agg["total"] = agg["new_count"] + agg["updated_count"]
 
-    pivot = agg.pivot(index="source", columns="date", values="new_count").fillna(0)
+    pivot = agg.pivot(index="site", columns="date", values="new_count").fillna(0)
     fig = px.imshow(
         pivot,
         labels={"x": "날짜", "y": "사이트", "color": "신규"},
@@ -194,10 +216,10 @@ else:
     limit = st.number_input("최대 행 수", min_value=10, max_value=500, value=50, step=10)
     table = runs[runs["status"] == "error"] if show_errors_only else runs
     table = table.head(int(limit))[
-        ["started_at", "source", "status", "new_count", "updated_count", "error"]
+        ["started_at", "site", "status", "new_count", "updated_count", "error"]
     ].rename(columns={
         "started_at": "시작",
-        "source": "사이트",
+        "site": "사이트",
         "status": "상태",
         "new_count": "신규",
         "updated_count": "재확인",
