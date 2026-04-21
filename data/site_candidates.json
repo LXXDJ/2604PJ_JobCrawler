@@ -17,7 +17,7 @@
   {"category": "교민", "name": "재캄보디아한인회", "url": "http://www.hanin.or.kr/bbs/board.php?bo_table=Information", "site_id": "hanin", "registered": true},
   {"category": "교민", "name": "시엠립한인회", "url": "https://siemreap.korean.net/bbs/board.php?bo_table=tb33", "site_id": "siemreap", "registered": true},
 
-  {"category": "종합_포털", "name": "캐치", "url": "https://www.catch.co.kr/Job/Listing", "note": "대졸 공채 중심"},
+  {"category": "종합_포털", "name": "캐치", "url": "https://www.catch.co.kr/", "note": "대졸 공채 중심 — JS SPA, 메인 URL 로 분석"},
   {"category": "종합_포털", "name": "알바몬", "url": "https://www.albamon.com/", "note": "과거 GraphQL 필터옵션 오인식 — validator 강화로 재시도 가치"},
   {"category": "종합_포털", "name": "교차로 구인구직", "url": "https://www.chol.com/", "note": "CSV 기반, 실제 공고 페이지 확인 필요"},
   {"category": "종합_포털", "name": "벼룩시장 구인구직", "url": "https://www.beol.kr/", "note": "findall 과 별개 도메인인지 확인 필요"},

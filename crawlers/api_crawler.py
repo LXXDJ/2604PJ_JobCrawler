@@ -41,6 +41,9 @@ HEADER_BLACKLIST = {":authority", ":method", ":path", ":scheme",
 TITLE_KEYS = [
     "title", "jobTitle", "postSubject", "subject", "name",
     "jobName", "jobPostingName", "position", "positionName",
+    # 한국식 축약 — validator EMBEDDED_TITLE_KEYS 와 보조 맞춤
+    "recruitTitle", "postingTitle", "rcrtTitle", "rcrtSj", "empmnTitle",
+    "pblntTitle", "boardTitle", "listSj", "bidNm",
 ]
 COMPANY_KEYS = [
     "company", "companyName", "compNm", "giupNm", "corpName",
@@ -56,8 +59,9 @@ DATE_KEYS = [
 ]
 ID_KEYS = [
     "id", "jobId", "postId", "seq", "seqNo", "articleId",
-    # 한국식 축약 — 벼룩시장 adId, 고용정보원 rcrtId, 사람인 계열 postSeq 등
-    "adId", "rcrtId", "recId", "recruitId", "jobSeq", "postSeq",
+    # 한국식 축약 — 벼룩시장 adId, 고용정보원 rcrtId, 사람인 계열 postSeq,
+    # 알바몬 recruitNo, 공공기관 pblntId 등
+    "adId", "rcrtId", "recId", "recruitId", "recruitNo", "jobSeq", "postSeq",
     "giupSeq", "giupId", "pblntId",
 ]
 LOCATION_KEYS = [

@@ -545,6 +545,9 @@ def _is_code_table_pattern(items: list) -> bool:
 EMBEDDED_TITLE_KEYS = [
     "title", "jobTitle", "postSubject", "subject", "name",
     "jobName", "jobPostingName", "position", "positionName",
+    # 한국 사이트 축약 — 알바몬 recruitTitle, 공공기관 rcrtTitle/empmnTitle 등
+    "recruitTitle", "postingTitle", "rcrtTitle", "rcrtSj", "empmnTitle",
+    "pblntTitle", "boardTitle", "listSj", "bidNm",
 ]
 
 
