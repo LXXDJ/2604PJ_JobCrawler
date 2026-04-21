@@ -50,17 +50,127 @@ best_index=-1 은 정말로 **전부 명백한 메타데이터/트래킹** 일 �
 """
 
 
-def _build_ranker_user_message(candidates: list) -> str:
-    """LLM 에게 보낼 candidates 요약 문자열"""
+def _build_ranker_user_message(candidates: list, exclude: Optional[list] = None) -> str:
+    """LLM 에게 보낼 candidates 요약 문자열.
+
+    exclude: 직전 시도에서 선택됐다가 validator 가 거부한 index 리스트.
+             있으면 "이 index 들은 공고 API 가 아님이 확인됨 — 제외하고 다시 고르라" 를 프롬프트에 추가.
+    """
     lines = ["아래 후보 중 공고 리스트 API 의 index 를 골라라.\n"]
+    if exclude:
+        lines.append(
+            f"※ 직전 시도에서 고른 index {exclude} 는 실제 호출해봤을 때 필터옵션/코드테이블로 "
+            f"판명됨. 이 index 는 다시 고르지 말고 다른 후보 중에서 선택하라."
+        )
+        lines.append("")
     for i, c in enumerate(candidates):
         shape = c["response_shape"]
-        lines.append(f"[{i}] {c['method']} {c['url']}")
+        marker = " [제외됨]" if exclude and i in exclude else ""
+        lines.append(f"[{i}]{marker} {c['method']} {c['url']}")
         lines.append(f"    score: {c.get('score')}")
         lines.append(f"    response_shape: {json.dumps(shape, ensure_ascii=False)[:500]}")
         lines.append(f"    sample: {c['body_snippet'][:300]}")
         lines.append("")
     return "\n".join(lines)
+
+
+def llm_rank_candidates(
+    pool: list[dict],
+    api_key: str,
+    model: str = "gpt-4o-mini",
+    timeout: int = 30,
+    exclude: Optional[list] = None,
+) -> tuple[Optional[int], str]:
+    """LLM 으로 pool 에서 진짜 공고 리스트 API 를 고른다 (재시도 시 외부에서도 호출 가능).
+
+    exclude: 이전에 골랐다가 거부된 index 들. LLM 이 또 고르면 호출부에서 폐기.
+
+    Returns: (index, reason)
+        - (0..len-1, reason): LLM 이 고른 index
+        - (-1, reason)       : LLM 이 명시적으로 "적절한 후보 없음"
+        - (None, reason)     : 호출/파싱 실패
+    """
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key, timeout=timeout)
+        response = client.chat.completions.create(
+            model=model,
+            max_tokens=256,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": LLM_RANKER_SYSTEM_PROMPT},
+                {"role": "user", "content": _build_ranker_user_message(pool, exclude=exclude)},
+            ],
+        )
+        raw = response.choices[0].message.content or ""
+    except Exception as e:
+        return None, f"LLM 호출 실패: {type(e).__name__}: {e}"
+
+    parsed = _extract_json(raw)
+    if parsed is None:
+        return None, f"LLM 응답 JSON 파싱 실패: {raw[:200]!r}"
+
+    try:
+        idx = int(parsed.get("best_index", -1))
+    except (TypeError, ValueError):
+        return None, f"best_index 숫자 아님: {parsed!r}"
+
+    reason = str(parsed.get("reason", ""))[:300]
+
+    # -1 = 명시 거부 (호출부가 별도 처리)
+    if idx < 0:
+        return -1, f"LLM: 적절한 공고 API 없음 — {reason}"
+
+    if idx >= len(pool):
+        return None, f"LLM: 범위 초과 index={idx} (pool={len(pool)}) — {reason}"
+
+    # exclude 에 있는데 또 고른 경우 — LLM 실수, 호출부가 재시도 중단 판단
+    if exclude and idx in exclude:
+        return None, f"LLM 이 이미 제외된 index={idx} 를 또 선택 — 재시도 한계 (reason={reason})"
+
+    return idx, reason
+
+
+def _extract_json(text: str) -> Optional[dict]:
+    """LLM 응답에서 JSON 꺼내기 — response_format=json_object 덕에 보통 그대로 파싱됨."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```\s*$", "", text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def build_config_from_candidate(candidate: dict, url: str) -> dict:
+    """pool 의 한 candidate dict 에서 api_discovered config 를 만든다.
+
+    재시도 시 main.py 에서 사용 — 다른 후보 pick 으로 config 재생성할 때 쓴다.
+    원래 PlaywrightDiscoveryStrategy.run 이 만드는 config 와 동일한 구조.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    return {
+        "platform": "api_discovered",
+        "base_url": f"{parsed.scheme}://{parsed.netloc}",
+        "api_endpoint": candidate["url"],
+        "method": candidate["method"],
+        "request_headers": candidate["request_headers"],
+        "response_shape": candidate["response_shape"],
+        "response_sample": candidate["body_snippet"],
+        "selection_source": "llm_retry",
+        "needs_manual_adapter": True,
+    }
 
 
 USER_AGENT = (
@@ -194,7 +304,12 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
         llm_reason = ""
         llm_explicit_reject = False
         if self.use_llm_ranker and self.llm_api_key and len(pool) > 0:
-            llm_selected_index, llm_reason = self._llm_rank(pool)
+            llm_selected_index, llm_reason = llm_rank_candidates(
+                pool,
+                api_key=self.llm_api_key,
+                model=self.llm_model,
+                timeout=self.llm_timeout,
+            )
             if llm_selected_index == -1:
                 # LLM 이 "전부 메타데이터/트래킹" 명시 판정 — 규칙점수 폴백 금지.
                 # 환각 방어: 후보가 명백히 공고 API 아닌데도 score 로 억지 선택하는 사고 방지.
@@ -243,6 +358,11 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
                 }
                 for c in pool[: self.top_n]
             ],
+            # 전체 pool 을 내부용으로 보관 — main.py 의 validator 실패 재시도 루프에서 다른
+            # 후보로 재선택할 때 필요. 언더스코어 prefix 는 "sites.json 에 저장하지 않는 내부 필드"
+            # 의 관례 (sites_registry._api_analysis_to_source 가 명시 필드만 복사하므로 누락됨).
+            "_ranker_pool": pool,
+            "_ranker_selected_index": llm_selected_index,
             "needs_manual_adapter": True,
         }
 
@@ -266,70 +386,6 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
         )
 
     # --- 내부 헬퍼 ---
-
-    def _llm_rank(self, pool: list[dict]) -> tuple[Optional[int], str]:
-        """
-        LLM 에게 후보 풀을 보여주고 진짜 공고 API index 를 선택받는다.
-
-        Returns: (index, reason) 세 가지 의미:
-            - (0..len-1, reason) : LLM 이 후보 중 하나 선택 → 그대로 사용
-            - (-1, reason)       : LLM 이 "적절한 공고 API 없음" 명시 → 폴백 금지
-            - (None, reason)     : LLM 호출/파싱 실패 → 규칙점수 폴백 허용
-        """
-        try:
-            from openai import OpenAI
-
-            client = OpenAI(api_key=self.llm_api_key, timeout=self.llm_timeout)
-            response = client.chat.completions.create(
-                model=self.llm_model,
-                max_tokens=256,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": LLM_RANKER_SYSTEM_PROMPT},
-                    {"role": "user", "content": _build_ranker_user_message(pool)},
-                ],
-            )
-            raw = response.choices[0].message.content or ""
-        except Exception as e:
-            return None, f"LLM 호출 실패: {type(e).__name__}: {e}"
-
-        parsed = self._extract_json(raw)
-        if parsed is None:
-            return None, f"LLM 응답 JSON 파싱 실패: {raw[:200]!r}"
-
-        try:
-            idx = int(parsed.get("best_index", -1))
-        except (TypeError, ValueError):
-            return None, f"best_index 숫자 아님: {parsed!r}"
-
-        reason = str(parsed.get("reason", ""))[:300]
-
-        # -1 이면 "적절한 후보 없음" — 명시 거부 sentinel (호출부가 별도 처리)
-        if idx < 0:
-            return -1, f"LLM: 적절한 공고 API 없음 — {reason}"
-
-        if idx >= len(pool):
-            return None, f"LLM: 범위 초과 index={idx} (pool={len(pool)}) — {reason}"
-
-        return idx, reason
-
-    def _extract_json(self, text: str) -> Optional[dict]:
-        """LLM 응답에서 JSON 꺼내기 — response_format=json_object 덕에 보통 그대로 파싱됨."""
-        text = text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text)
-            text = re.sub(r"\s*```\s*$", "", text)
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError:
-                return None
-        return None
 
     def _capture_network(self, url: str) -> list[dict]:
         """

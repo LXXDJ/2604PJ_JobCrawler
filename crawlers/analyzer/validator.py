@@ -35,6 +35,40 @@ UI_NOISE_TITLES = {
     "login", "logout", "search", "home", "more",
 }
 
+# API validator 전용 — "필터옵션/코드테이블 vs 진짜 공고 리스트" 판별용 2차 시그널.
+# LLM Ranker 가 가끔 GraphQL 필터옵션·브랜드코드 API 를 공고 리스트로 오인식하는 사고를 막는다.
+# 필터옵션은 보통 {id, name} 짧은 필드 몇개 / 코드 2~6자. 진짜 공고는 제목 10자+ 회사/날짜/URL 보유.
+
+MIN_AVG_TITLE_LEN_API = 8   # 필터코드(2~6자)는 걸러내고 짧은 공고제목은 남기는 경계선
+MIN_SECOND_SIGNAL_RATIO = 0.5  # 아이템 중 회사/날짜/URL/위치 중 하나라도 가진 비율 하한
+
+# 아이템에서 "2차 시그널" 로 인정할 필드명 (snake/camel/한국어축약 혼재 허용).
+API_SECOND_SIGNAL_KEYS = {
+    # 회사/작성자
+    "company", "companyname", "compnm", "corp", "corpname", "corp_name",
+    "author", "employer", "giupnm", "giupname", "orannm", "writer", "writernm",
+    # 날짜 (등록/마감/갱신 어느거든)
+    "date", "posteddate", "postedat", "createdat", "updatedat", "regdate",
+    "regdt", "registdt", "modifiedat", "enddate", "closeddate", "deadline",
+    "startdate", "opendate",
+    # 위치
+    "location", "region", "area", "city", "address", "workplace", "worklocation",
+    "workregion", "loc",
+    # URL/링크
+    "url", "link", "href", "detailurl", "jobUrl", "apply_url", "applyurl",
+    "permalink", "detailhref",
+    # 급여/근무형태
+    "salary", "pay", "salarymin", "salarymax", "wage",
+    "employmenttype", "jobtype", "worktype", "contracttype",
+    # 카테고리 (약한 시그널이지만 있는 경우 많음)
+    "category", "jobcategory", "occupation", "industry",
+}
+
+# 코드테이블 패턴 — 아이템이 거의 이 필드들로만 구성되면 "메타데이터" 로 간주.
+CODE_TABLE_KEYS = {"id", "code", "name", "value", "label", "key", "text", "title"}
+CODE_TABLE_MAX_KEYS = 3    # 3개 이하 필드만 가진 아이템이 다수면 코드테이블로 봄
+CODE_TABLE_RATIO = 0.8     # 80% 이상 아이템이 이 패턴이면 거부
+
 
 @dataclass
 class ValidationReport:
@@ -334,12 +368,103 @@ def validate_api_config(config: dict) -> ValidationReport:
             sample_titles=titles[:3],
         )
 
+    # --- 2차 시그널 검증 (필터옵션/코드테이블 가드) ---
+    # (1) 제목 평균 길이 — 필터코드는 2~6자, 공고는 보통 15자+
+    avg_title_len = sum(len(t) for t in titles) / len(titles) if titles else 0
+    if avg_title_len < MIN_AVG_TITLE_LEN_API:
+        return ValidationReport(
+            ok=False,
+            reason=(
+                f"제목 평균 길이 {avg_title_len:.1f}자 < {MIN_AVG_TITLE_LEN_API}자 "
+                f"— 필터옵션/코드테이블 API 가능성"
+            ),
+            items_extracted=len(items),
+            fields_matched=fields_matched,
+            sample_titles=titles[:3],
+        )
+
+    # (2) 코드테이블 패턴 — 아이템이 {id/code/name/value/label} 같은 짧은 필드셋만 가지면 거부
+    if _is_code_table_pattern(items):
+        return ValidationReport(
+            ok=False,
+            reason=(
+                f"아이템이 {{id,code,name,...}} 류 필드 ≤{CODE_TABLE_MAX_KEYS}개로만 구성 "
+                f"({CODE_TABLE_RATIO:.0%}+) — 코드테이블/필터옵션 API"
+            ),
+            items_extracted=len(items),
+            fields_matched=fields_matched,
+            sample_titles=titles[:3],
+        )
+
+    # (3) 2차 시그널 비율 — 회사/날짜/위치/URL/급여 중 하나라도 가진 아이템 비율
+    second_signal_count = sum(
+        1 for item in items
+        if isinstance(item, dict) and _has_second_signal(item)
+    )
+    second_signal_ratio = second_signal_count / len(items)
+    fields_matched["second_signal"] = second_signal_count
+    if second_signal_ratio < MIN_SECOND_SIGNAL_RATIO:
+        return ValidationReport(
+            ok=False,
+            reason=(
+                f"2차 시그널(회사/날짜/위치/URL) 비율 {second_signal_ratio:.0%} "
+                f"({second_signal_count}/{len(items)}) < {MIN_SECOND_SIGNAL_RATIO:.0%} "
+                f"— 메타데이터 API 가능성"
+            ),
+            items_extracted=len(items),
+            fields_matched=fields_matched,
+            sample_titles=titles[:3],
+        )
+
     return ValidationReport(
         ok=True,
         items_extracted=len(items),
         fields_matched=fields_matched,
         sample_titles=titles[:3],
     )
+
+
+def _normalize_key(key: str) -> str:
+    """snake/camel 혼재를 맞추기 위해 소문자화 + 언더스코어 제거."""
+    return key.replace("_", "").replace("-", "").lower()
+
+
+def _has_second_signal(item: dict) -> bool:
+    """아이템이 2차 시그널 필드 (회사/날짜/URL 등) 를 하나라도 가지면 True.
+
+    top-level 만 체크. nested 는 들여다보지 않는다 (거짓양성 위험).
+    """
+    for key in item.keys():
+        if not isinstance(key, str):
+            continue
+        if _normalize_key(key) in API_SECOND_SIGNAL_KEYS:
+            # 값이 공백/None 만이 아닌지도 확인 — 필드가 있어도 빈 문자열이면 의미없음
+            v = item[key]
+            if v is None:
+                continue
+            if isinstance(v, str) and not v.strip():
+                continue
+            return True
+    return False
+
+
+def _is_code_table_pattern(items: list) -> bool:
+    """아이템들이 {id,code,name} 류 짧은 필드셋으로만 구성되면 True.
+
+    80%+ 아이템이 3개 이하 필드 + 그 필드들이 전부 코드테이블 키셋에 속하면 거부.
+    """
+    if not items:
+        return False
+    pattern_count = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        keys_norm = {_normalize_key(k) for k in item.keys() if isinstance(k, str)}
+        if len(keys_norm) > CODE_TABLE_MAX_KEYS:
+            continue
+        if keys_norm <= CODE_TABLE_KEYS:  # 모든 키가 코드테이블 셋 안에
+            pattern_count += 1
+    return pattern_count / len(items) >= CODE_TABLE_RATIO
 
 
 # ============================================================

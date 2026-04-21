@@ -27,21 +27,130 @@
 
 ## 크롤링 대상
 
-현재 9개 사이트 등록 (2026-04 기준).
-
-| site_id | 추출 방식 | URL | 비고 |
-|---------|-----------|-----|------|
-| hanin | dom | http://www.hanin.or.kr | 재캄보디아한인회 (그누보드 nariya) |
-| siemreap | dom | https://siemreap.korean.net | 시엠립한인회 (그누보드 fz) |
-| camhr | api | https://www.camhr.com | 캄보디아 최대, Nuxt SSR → API 직접 호출 |
-| jobkorea | dom | https://www.jobkorea.co.kr/recruit/joblist | |
-| incruit | dom | https://job.incruit.com/jobdb_list/searchjob.asp | `today=y` 파라미터로 당일만 |
-| wanted | api | https://www.wanted.co.kr/wdlist | Phase 3 api_crawler 자동 등록 |
-| ppomppu | dom | https://www.ppomppu.co.kr/zboard/zboard.php?id=guin | |
-| alba | dom | https://www.alba.co.kr/job/Main | |
-| radiokorea | dom | https://www.radiokorea.com/community/jobs.php | 교민 커뮤니티 |
+현재 **15개 사이트 등록** (2026-04-21 기준). 9개 → 15개 확장 과정에서 사이트별 방어 강도가 크게 달라 **난이도별로 분류**하고, 각 단계에서 도입한 우회 기법을 정리함.
 
 > 목록은 `python scripts/list_sites.py` 로 확인. 비활성화된 사이트는 `enabled: false` 로 건너뜀.
+
+### 난이도 분류 요약
+
+| 난이도 | 특징 | 필요한 기법 | 사이트 수 |
+|--------|------|-------------|-----------|
+| **하** | 정적 HTML, 봇차단 없음 | `requests` + CSS selector (heuristic 자동) | 10 |
+| **중** | SPA, JSON API 뒤에 목록 숨김 | Playwright 로 내부 API 스니핑 + LLM Ranker | 4 |
+| **상** | JA3/TLS 지문 탐지로 403 | curl_cffi (Chrome TLS impersonate) | 1 |
+| 미해결 | Form-submit / SPA 매핑 / 쿠키 세션 | 추가 엔지니어링 필요 | 5+ |
+
+---
+
+### 하 — 정적 HTML / 그누보드 (10개)
+
+**공통 특징**: 초기 HTML 응답에 공고 리스트가 그대로 박혀있음. User-Agent 만 바꾸면 그냥 긁힘.
+**도입 기법**: `heuristic.py` 의 플랫폼 시그니처 탐지 (그누보드 전역변수, 알려진 테마 CSS 셀렉터). 실패하면 LLM 에 selector 추천 요청.
+
+| site_id | URL | 서브타입 | 한 줄 설명 |
+|---------|-----|----------|-----------|
+| hanin | http://www.hanin.or.kr | 그누보드 (nariya) | 재캄보디아한인회 |
+| siemreap | https://siemreap.korean.net | 그누보드 (fz) | 시엠립한인회 |
+| ppomppu | https://www.ppomppu.co.kr/zboard/zboard.php?id=guin | 그누보드 (zboard) | 뽐뿌 구인정보 |
+| radiokorea | https://www.radiokorea.com/community/jobs.php | 그누보드 (custom) | LA 교민 |
+| jobkorea | https://www.jobkorea.co.kr/recruit/joblist | static_html | — |
+| incruit | https://job.incruit.com/jobdb_list/searchjob.asp | static_html | `today=y` 파라미터로 당일만 |
+| alba | https://www.alba.co.kr/job/Main | static_html | 알바천국 |
+| peoplenjob | https://www.peoplenjob.com/jobs | static_html | 피플앤잡 (외국계 전문) |
+| career | https://job.career.co.kr/jobs/ | static_html | 커리어 |ㄴ
+
+---
+
+### 중 — SPA 내부 API 스니핑 (4개)
+
+**공통 특징**: 초기 HTML 은 빈 껍데기 (React/Nuxt/Next.js). 공고 리스트는 JS 가 나중에 `/api/...` 를 호출해서 채움. HTML 만 긁으면 0건.
+**도입 기법**:
+1. `playwright_discovery.py` — 헤드리스 Chromium 으로 페이지를 실제로 띄워 **네트워크 트래픽을 가로채** `/api/*.json` 후보 수집
+2. 규칙 점수(응답 크기·JSON 배열 길이·경로 패턴) 상위를 **LLM Ranker** 에 넘겨 "메타데이터/필터옵션 API 말고 진짜 공고 리스트" 재선별
+3. 수동 polish 단계에서 필요한 헤더·파라미터(`referer`, `x-rocket-*`, `jp-ssr-auth` 등)와 `item_path` 경로 확정
+
+| site_id | URL | API 엔드포인트 | 특기사항 |
+|---------|-----|----------------|----------|
+| camhr | https://www.camhr.com | `api.camhr.com/.../page-query` | 수동 polish (`urgent=true` 필터 제거, `size=50`, `detail_endpoint_template` 추가) |
+| wanted | https://www.wanted.co.kr/wdlist | `/api/chaos/navigation/v1/results` | `wanted-user-agent: user-web` 헤더 필수 |
+| rocketpunch | https://www.rocketpunch.com/jobs | `/api/proxy/jobs` | `x-rocket-client-id`, `x-rocket-app-key` 등 8종 커스텀 헤더 |
+| jumpit | https://www.jumpit.co.kr/positions | `jumpit-api.saramin.co.kr/api/positions` | 사람인 계열 (도메인만 다름) |
+| jobplanet | https://www.jobplanet.co.kr/job | `/api/v3/job/postings` | `jp-ssr-auth` 토큰 (고정값) + `jp-os-type: mobile_web` |
+
+> **링커리어·알바몬 제외 이유** (역사적): LLM Ranker 가 GraphQL 필터옵션 / 브랜드 코드 API 를 1위로 오인식해서 `scripts/cleanup_bad_entries.py` 로 제거했었음. 이후 아래 ① + ② 로 대응 완료.
+>
+> **① validator 강화** ([validator.py:27-58](crawlers/analyzer/validator.py#L27-L58)): `validate_api_config` 에 3가지 2차 시그널 체크 추가 — "`name` 필드 있는 배열" 만으로는 통과 못 함.
+> - 제목 평균 길이 ≥ 8자 (필터코드는 2~6자)
+> - 2차 시그널 (회사·날짜·위치·URL·급여 등) 보유 아이템 ≥ 50%
+> - `{id,code,name,value,label}` 3개 이하 필드로만 구성된 아이템이 80%+ 면 "코드테이블" 로 거부
+>
+> **② LLM Ranker 재시도 루프** ([main.py cmd_add API 분기](main.py) + [playwright_discovery.py `llm_rank_candidates`](crawlers/analyzer/strategies/playwright_discovery.py)): validator 가 거부하면 해당 idx 를 exclude 에 추가하고 LLM 에 다른 후보 요청 (최대 `VALIDATOR_RETRY_MAX` 회). pool 은 `result.config["_ranker_pool"]` 로 전략이 보존 — 언더스코어 prefix 는 sites.json 에 저장 안 함.
+>
+> **아직 수동 필요 케이스 (5~10% 추정)**: 로그인 후에만 진짜 API 가 호출 / 복잡한 POST body / 스크롤/필터 클릭 같은 상호작용이 있어야 API 가 노출 / iframe 격리. 현재 링커리어가 이 범주 — pool 안에 진짜 공고 API 가 아예 없음.
+
+---
+
+### 상 — JA3/TLS 지문 우회 (1개)
+
+**공통 특징**: User-Agent·Accept·Sec-Fetch-* 를 Chrome 과 동일하게 보내도 **403 Forbidden**. 이유는 **TLS 핸드셰이크 패턴(JA3 지문)** 이 Python/OpenSSL 고유값이라 서버가 보자마자 봇 판정.
+
+**도입 기법**: [crawlers/http_client.py](crawlers/http_client.py) 를 `requests` → **curl_cffi** 로 교체.
+- 내부적으로 C 라이브러리 **curl-impersonate** 를 쓰는 Python 바인딩
+- `impersonate="chrome131"` 한 줄로 실제 Chrome 131 의 암호 스위트·TLS 확장·HTTP/2 프레임 순서까지 그대로 재현
+- 크롤러·분석기 전체가 `http_client.fetch` 하나를 쓰므로 한 곳만 바꾸면 모든 호출이 JA3 우회
+
+```python
+# crawlers/http_client.py
+from curl_cffi import requests as cffi_requests
+
+response = cffi_requests.get(url, impersonate="chrome131", headers=..., ...)
+```
+
+| site_id | URL | 증상 | 해결 |
+|---------|-----|------|------|
+| saramin | https://www.saramin.co.kr/.../job-category | `requests` 로 403 즉시 차단 | curl_cffi chrome131 impersonate → 78건 추출 |
+
+---
+
+### 미해결 — 추가 엔지니어링 필요
+
+발견은 했지만 현재 파이프라인으로 못 잡은 사이트들. 방어 패턴별로 묶어 기록.
+
+#### ① Form-submit 기반 (초기 HTML 에 공고 없음)
+
+검색 조건을 POST 로 보내면 AJAX 로 결과가 내려오는 구조. 초기 페이지 GET 응답에는 리스트 0건.
+
+| 사이트 | 필요한 작업 |
+|--------|-------------|
+| 고용24 (work24) | Playwright 로 form submit → 결과 페이지 렌더 후 DOM 추출 |
+| 알리오 (alio) | AJAX 엔드포인트 직접 캡처 후 api_crawler 수동 등록 |
+
+#### ② SPA 타입 매핑 미추가
+
+analyzer 가 `site_type=spa_nuxt` / `spa_vue` 로 감지는 했지만, [crawlers/sites_registry.py](crawlers/sites_registry.py) 의 `SITE_TYPE_TO_EXTRACTION_METHOD` 딕셔너리에 매핑이 없어서 "미지원" 으로 거절됨.
+
+| 사이트 | 감지된 타입 |
+|--------|-------------|
+| 스카우트 (scout) | spa_nuxt |
+| 벼룩시장 (findall) | spa_vue |
+
+→ 간단한 코드 추가로 해결 가능 (spa_nuxt → playwright_discovery, spa_vue → playwright_discovery).
+
+#### ③ 쿠키/세션 기반 심화 방어
+
+JA3 지문까지 흉내내도 막힘. 서버가 첫 GET 응답에 쿠키를 내려주고, 그 쿠키가 붙은 두번째 요청만 허용하는 식.
+
+| 사이트 | 증상 |
+|--------|------|
+| 하이브레인 (hibrain) | curl_cffi 로도 403 유지 — 쿠키 세션/챌린지 우회 필요 |
+
+→ Playwright 실제 렌더로 쿠키 획득 후 세션 재사용 필요.
+
+#### ④ 로컬 네트워크 이슈
+
+| 사이트 | 증상 |
+|--------|------|
+| 프로그래머스 (programmers) | DNS 해석 실패 — 코드 문제 아님 |
 
 ---
 
@@ -122,11 +231,12 @@
 - 이미 수집한 공고의 상세 API 호출을 스킵 → 빠르고 서버에 덜 부담
 - 공고가 사라진 경우(만료)는 last_seen_at이 오래된 것으로 구분 가능
 
-### 5. HTTP 안정성 (재시도 로직)
+### 5. HTTP 안정성 + 봇차단 우회
 
 - 모든 HTTP 요청은 **기본 3회 재시도** + **점증적 대기(backoff)**
 - 일시적 타임아웃, 네트워크 오류에 견고
 - `main.py` 상단의 `HTTP_TIMEOUT`, `HTTP_MAX_RETRIES`, `HTTP_RETRY_BACKOFF`로 조정
+- **curl_cffi 기반 TLS 지문 위장** — 내부적으로 `curl-impersonate` 를 쓰는 Python 바인딩. `impersonate="chrome131"` 로 실제 Chrome 의 JA3/HTTP2 프로파일을 흉내내서 사람인·잡플래닛 같은 JA3 지문 기반 봇판별 사이트를 뚫는다. 크롤러·분석기 전체가 [crawlers/http_client.py](crawlers/http_client.py) 의 `fetch()` 하나를 공유하므로 한 곳에서 일괄 적용됨.
 
 ---
 
@@ -154,7 +264,7 @@
 │   ├── api_crawler.py            # REST API 직접 호출 (CamHR, Wanted)
 │   ├── hardcoded_crawls.py       # analyzer 자동등록 불가 사이트 수동 정의
 │   ├── sites_registry.py         # sites.json CRUD + 중복 체크
-│   ├── http_client.py            # requests + 재시도 + 공통 헤더
+│   ├── http_client.py            # curl_cffi (chrome131 impersonate) + 재시도 + 공통 헤더
 │   ├── database.py               # SQLite (jobs / crawl_runs)
 │   ├── healthcheck.py            # crawl_runs 이력 기반 이상 감지
 │   └── slack_notifier.py         # 헬스체크 알림 + 배치 요약 알림
@@ -301,7 +411,10 @@ Register-ScheduledTask -TaskName "JobCrawler" -Action $action -Trigger $trigger 
 ## 기술 스택
 
 - **Python 3.11**
-- **requests** — HTTP 요청
+- **requests** — HTTP 예외 타입 (curl_cffi 도 호환되게 던짐)
+- **curl_cffi** — **Chrome TLS/JA3 지문 임퍼소네이트** — JA3 기반 봇판별 우회 (사람인·잡플래닛 등). `impersonate="chrome131"` 로 실제 Chrome 131 의 TLS 핸드셰이크 패턴까지 재현
 - **BeautifulSoup4 + lxml** — HTML 파싱
 - **Playwright** — SPA 사이트 네트워크 캡처 / 브라우저 자동화
+- **OpenAI (GPT-4o-mini)** — analyzer 의 LLM 폴백 + 후보 API LLM Ranker
 - **SQLite** — 데이터 저장 (Python 내장)
+- **Streamlit + Plotly** — 대시보드 (`streamlit run dashboard.py`)

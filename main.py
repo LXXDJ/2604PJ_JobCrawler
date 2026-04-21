@@ -424,6 +424,100 @@ def cmd_add(url: str):
             if report.ok:
                 break
 
+    # --- API validator 실패 시 LLM Ranker 재시도 루프 ---
+    # 필터옵션/코드테이블로 판명된 후보를 exclude 하고 LLM 에 다른 후보 요청.
+    # 풀은 playwright_discovery 가 result.config["_ranker_pool"] 에 남겨둠.
+    # (링커리어·알바몬처럼 GraphQL 필터 API / 브랜드코드 API 를 1위로 오인식하는 케이스용)
+    if (
+        not report.ok
+        and method == "api"
+        and VALIDATOR_RETRY_MAX > 0
+        and LLM_API_KEY
+    ):
+        pool = result.config.get("_ranker_pool") or []
+        prev_idx = result.config.get("_ranker_selected_index")
+        excluded_idxs: list = [prev_idx] if isinstance(prev_idx, int) and prev_idx >= 0 else []
+
+        if not pool:
+            print("  [retry] API pool 정보 없음 (playwright_discovery 경로 아님) — 재시도 스킵")
+        else:
+            from analyzer.strategies.playwright_discovery import (
+                llm_rank_candidates,
+                build_config_from_candidate,
+            )
+
+            for attempt in range(1, VALIDATOR_RETRY_MAX + 1):
+                print(
+                    f"\n  [retry {attempt}/{VALIDATOR_RETRY_MAX}] "
+                    f"LLM Ranker 재호출 (exclude={excluded_idxs})..."
+                )
+                print(f"    실패 사유 : {report.reason}")
+
+                new_idx, rr_reason = llm_rank_candidates(
+                    pool,
+                    api_key=LLM_API_KEY,
+                    model=LLM_MODEL,
+                    exclude=excluded_idxs,
+                )
+
+                if new_idx is None or new_idx == -1:
+                    print(f"    [retry {attempt}] 포기: {rr_reason}")
+                    retry_history.append({
+                        "attempt": attempt,
+                        "input_reason": report.reason,
+                        "excluded_indexes": list(excluded_idxs),
+                        "outcome": "llm_gave_up",
+                        "detail": rr_reason,
+                    })
+                    break
+
+                print(f"    제안 idx={new_idx} — {pool[new_idx]['url']}")
+                if rr_reason:
+                    print(f"    이유: {rr_reason}")
+
+                # pool[new_idx] 를 base 로 config 재생성. _ranker_pool 은 다음 재시도에도 필요.
+                new_candidate_config = build_config_from_candidate(pool[new_idx], url)
+                new_candidate_config["_ranker_pool"] = pool
+                new_candidate_config["_ranker_selected_index"] = new_idx
+                new_candidate_config["all_candidates"] = result.config.get("all_candidates", [])
+                new_candidate_config["llm_reason"] = rr_reason
+                result.config = new_candidate_config
+
+                try:
+                    new_config = sites_registry.analysis_to_new_schema_config(result, url)
+                except Exception as e:
+                    print(f"    [retry {attempt}] 신 스키마 변환 실패: {type(e).__name__}: {e}")
+                    retry_history.append({
+                        "attempt": attempt,
+                        "input_reason": report.reason,
+                        "excluded_indexes": list(excluded_idxs),
+                        "proposed_idx": new_idx,
+                        "outcome": "schema_conversion_fail",
+                        "detail": str(e),
+                    })
+                    break
+
+                report = validate_api_config(new_config)
+                retry_history.append({
+                    "attempt": attempt,
+                    "excluded_indexes": list(excluded_idxs),
+                    "proposed_idx": new_idx,
+                    "proposed_endpoint": pool[new_idx]["url"],
+                    "llm_reasoning": rr_reason,
+                    "outcome": "ok" if report.ok else "fail",
+                    "new_reason": report.reason if not report.ok else "",
+                })
+
+                print(f"    [retry {attempt}] validator: ok={report.ok}")
+                if report.sample_titles:
+                    print(f"                    샘플 제목: {report.sample_titles}")
+                if report.fields_matched:
+                    print(f"                    매칭: {report.fields_matched}")
+                if report.ok:
+                    break
+
+                excluded_idxs.append(new_idx)
+
     if not report.ok:
         print(f"\n[거부] validator 실패: {report.reason}")
         if retry_history:
