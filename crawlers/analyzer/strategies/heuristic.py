@@ -144,37 +144,27 @@ class HeuristicStrategy(AnalysisStrategy):
         """
         last_error = None
 
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                response = requests.get(
-                    url,
-                    headers={"User-Agent": USER_AGENT},
-                    timeout=self.timeout,
-                    verify=False,  # self-signed 인증서 사이트도 허용
-                )
-                response.raise_for_status()
-                if attempt > 1:
-                    print(f"  [retry] {attempt}회 시도 성공")
-                return response.text, ""
-            except requests.exceptions.Timeout as e:
-                last_error = f"Timeout (attempt {attempt}/{self.max_retries})"
-                print(f"  [retry] {last_error}")
-            except requests.exceptions.ConnectionError as e:
-                last_error = f"ConnectionError (attempt {attempt}/{self.max_retries}): {type(e).__name__}"
-                print(f"  [retry] {last_error}")
-            except requests.exceptions.HTTPError as e:
-                # HTTP 에러 (4xx, 5xx)는 재시도해도 같은 결과일 가능성 높으므로 즉시 중단
-                return None, f"HTTP {e.response.status_code}"
-            except Exception as e:
-                last_error = f"{type(e).__name__}: {e}"
-                print(f"  [retry] {last_error}")
+        # http_client.fetch 는 내부적으로 curl_cffi 로 Chrome 131 impersonate.
+        # UA/헤더만 위장하는 requests 로 가면 사람인/하이브레인/잡플래닛 등에서
+        # JA3 기반 봇차단에 403 당함 — impersonate 필수.
+        try:
+            from http_client import fetch
+        except ImportError:
+            from crawlers.http_client import fetch
 
-            # 마지막 시도가 아니면 대기 후 재시도
-            if attempt < self.max_retries:
-                wait = self.retry_backoff * attempt  # 2s, 4s, 6s...
-                time.sleep(wait)
-
-        return None, f"시도 {self.max_retries}회 모두 실패: {last_error}"
+        try:
+            html = fetch(
+                url,
+                timeout=self.timeout,
+                max_retries=self.max_retries,
+                retry_backoff=self.retry_backoff,
+            )
+            return html, ""
+        except requests.exceptions.HTTPError as e:
+            # 4xx/5xx 는 http_client 가 즉시 raise.
+            return None, f"HTTP {e.response.status_code}"
+        except Exception as e:
+            return None, f"시도 {self.max_retries}회 모두 실패: {type(e).__name__}: {e}"
 
     # --- 사이트 타입 분류 ---
 

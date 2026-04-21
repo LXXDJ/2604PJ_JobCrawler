@@ -28,6 +28,12 @@ SITE_LABELS = {
     "ppomppu": "뽐뿌 구인정보",
     "alba": "알바천국",
     "radiokorea": "라디오코리아",
+    "rocketpunch": "로켓펀치",
+    "jumpit": "점핏",
+    "saramin": "사람인",
+    "jobplanet": "잡플래닛",
+    "peoplenjob": "피플앤잡",
+    "career": "커리어",
 }
 
 

@@ -420,5 +420,289 @@
         "Shinhan Bank America"
       ]
     }
+  },
+  {
+    "site_id": "rocketpunch",
+    "url": "https://www.rocketpunch.com/jobs",
+    "site_type": "api_discovered",
+    "added_at": "2026-04-21T04:50:27.182900+00:00",
+    "extraction_method": "api",
+    "requires_render": false,
+    "source": {
+      "api_endpoint": "https://www.rocketpunch.com/api/proxy/jobs",
+      "method": "GET",
+      "base_url": "https://www.rocketpunch.com",
+      "request_headers": {
+        "x-rocket-device-type": "PC",
+        "sec-ch-ua-platform": "\"Windows\"",
+        "referer": "https://www.rocketpunch.com/jobs",
+        "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
+        "x-rocket-client-id": "36d4c7e3-9ded-433b-8fa7-3af298a6ef96:5562425169329706:TBEr/iPvWOwPLY8R8IEqNLxlzPm/Vgm344XruxDriiI=",
+        "sec-ch-ua-mobile": "?0",
+        "baggage": "sentry-environment=production,sentry-release=43ff0fc24a9e90322980cbb3bbd093be4d8ae699,sentry-public_key=123369064c78319b1a84fddfd8c3bdd7,sentry-trace_id=288c5f1d9b205b6fecc940bead3aa7b5,sentry-org_id=4508221963960320,sentry-sampled=false,sentry-sample_rand=0.6476325859420631,sentry-sample_rate=0.1",
+        "sentry-trace": "288c5f1d9b205b6fecc940bead3aa7b5-b69a21f640e6d7d5-0",
+        "x-rocket-os-type": "WIN",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "accept": "application/json, text/plain, */*",
+        "x-rocket-app-key": "077cd9d8-7237-4bee-b2d3-77690d163cca",
+        "x-rocket-api-version": "3.0.0",
+        "x-rocket-client-type": "WEB",
+        "x-client-ip": ""
+      },
+      "list_params": {
+        "sort": "DATE_DESC"
+      },
+      "item_path": "items"
+    },
+    "pagination": {
+      "type": "api_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 20,
+      "fields_matched": {
+        "title": 20
+      },
+      "sample_titles": [
+        "경영사무 신입사원 모집",
+        "AI 기반 ERP 자동화 시스템 개발자 모집",
+        "정부과제·IR 전략 설계 (딥테크 / Physical"
+      ]
+    }
+  },
+  {
+    "site_id": "jumpit",
+    "url": "https://www.jumpit.co.kr/positions",
+    "site_type": "api_discovered",
+    "added_at": "2026-04-21T04:50:39.598759+00:00",
+    "extraction_method": "api",
+    "requires_render": false,
+    "source": {
+      "api_endpoint": "https://jumpit-api.saramin.co.kr/api/positions",
+      "method": "GET",
+      "base_url": "https://www.jumpit.co.kr",
+      "request_headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "referer": "https://jumpit.saramin.co.kr/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "accept": "application/json, text/plain, */*",
+        "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
+        "sec-ch-ua-mobile": "?0"
+      },
+      "list_params": {
+        "highlight": "false",
+        "sort": "popular"
+      },
+      "item_path": "result.positions"
+    },
+    "pagination": {
+      "type": "api_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 16,
+      "fields_matched": {
+        "title": 16
+      },
+      "sample_titles": [
+        "AI 개발자",
+        "프론트엔드 개발자_1~4년",
+        "웹어플리케이션 백엔드 개발자(2년↑)"
+      ]
+    }
+  },
+  {
+    "site_id": "saramin",
+    "url": "https://www.saramin.co.kr/zf_user/jobs/list/job-category",
+    "site_type": "static_html",
+    "added_at": "2026-04-21T04:56:32.807273+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://www.saramin.co.kr/zf_user/jobs/list/job-category",
+      "list_params": {},
+      "base_url": "https://www.saramin.co.kr",
+      "selectors": {
+        "list_rows": ".item",
+        "subject_link": "a strong.tit",
+        "author": "span.corp",
+        "date": "span.date",
+        "hit": "unknown",
+        "content": "unknown"
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 79,
+      "fields_matched": {
+        "title": 78,
+        "author": 78,
+        "date": 78,
+        "hit": 0
+      },
+      "sample_titles": [
+        "식품(차류) 패키지디자이너 모집",
+        "[피터팬의 좋은방 구하기] 영업 채용",
+        "디지털 퍼포먼스마케터 경력"
+      ]
+    }
+  },
+  {
+    "site_id": "jobplanet",
+    "url": "https://www.jobplanet.co.kr/job",
+    "site_type": "api_discovered",
+    "added_at": "2026-04-21T04:57:23.904193+00:00",
+    "extraction_method": "api",
+    "requires_render": false,
+    "source": {
+      "api_endpoint": "https://www.jobplanet.co.kr/api/v3/job/postings",
+      "method": "GET",
+      "base_url": "https://www.jobplanet.co.kr",
+      "request_headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "referer": "https://www.jobplanet.co.kr/job",
+        "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
+        "sec-ch-ua-mobile": "?0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "accept": "application/json",
+        "jp-ssr-auth": "jobplanet_desktop_ssr_1d6f8a5f219176accbb8fe051729fc6a",
+        "jp-os-type": "mobile_web"
+      },
+      "list_params": {
+        "occupation_level1": "",
+        "occupation_level2": "11928",
+        "years_of_experience": "",
+        "review_score": "",
+        "job_type": "",
+        "city": "",
+        "education_level_id": "",
+        "order_by": "aggressive",
+        "page_size": "8"
+      },
+      "item_path": "data.recruits"
+    },
+    "pagination": {
+      "type": "api_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 8,
+      "fields_matched": {
+        "title": 8
+      },
+      "sample_titles": [
+        "백엔드 개발자 Backend Developer (Nest.js) 채용(경력직)",
+        "풀스택 개발자(Full Stack Developer) 채용(경력직)",
+        "AI Robotics Engineer"
+      ]
+    }
+  },
+  {
+    "site_id": "peoplenjob",
+    "url": "https://www.peoplenjob.com/jobs",
+    "site_type": "static_html",
+    "added_at": "2026-04-21T04:58:14.342359+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://www.peoplenjob.com/jobs",
+      "list_params": {},
+      "base_url": "https://www.peoplenjob.com",
+      "selectors": {
+        "list_rows": ".jd-card",
+        "subject_link": ".jd-card-title a",
+        "author": ".jd-card-company",
+        "date": ".jd-card-meta-static",
+        "hit": "",
+        "content": ""
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 30,
+      "fields_matched": {
+        "title": 30,
+        "author": 30,
+        "date": 30
+      },
+      "sample_titles": [
+        "[아트라스콥코코리아] Process & Operations Coordinator 인턴십 (광명)",
+        "[글로벌 외국계] HR Intern (part-time position)",
+        "U[글로벌 식음료] ​브랜드마케팅 프로모션 (6-10년)"
+      ]
+    }
+  },
+  {
+    "site_id": "career",
+    "url": "https://job.career.co.kr/jobs/",
+    "site_type": "static_html",
+    "added_at": "2026-04-21T04:58:58.734036+00:00",
+    "extraction_method": "dom",
+    "requires_render": false,
+    "source": {
+      "list_url": "https://job.career.co.kr/jobs/",
+      "list_params": {},
+      "base_url": "https://job.career.co.kr",
+      "selectors": {
+        "list_rows": "tbody tr",
+        "subject_link": "td:nth-child(2) a.tx",
+        "author": null,
+        "date": "td:nth-child(5) .txsArea:first-child .itx",
+        "hit": null,
+        "content": null
+      },
+      "parse_mode": "direct",
+      "skip_row_if_has_class": []
+    },
+    "pagination": {
+      "type": "url_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 30,
+      "fields_matched": {
+        "title": 30,
+        "date": 0
+      },
+      "sample_titles": [
+        "대기업 골프장호텔 외식사업부(정규직)모집",
+        "산업별/지역별  SI/SM  프로젝트  안내",
+        "[월최대 450 가능] 쿠팡CLS 현장관리 및 사무 행정(경력무관) 채용"
+      ]
+    }
   }
 ]
