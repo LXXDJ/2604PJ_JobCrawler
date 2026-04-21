@@ -34,6 +34,8 @@ SITE_LABELS = {
     "jobplanet": "잡플래닛",
     "peoplenjob": "피플앤잡",
     "career": "커리어",
+    "findall": "벼룩시장",
+    "hibrain": "하이브레인",
 }
 
 
