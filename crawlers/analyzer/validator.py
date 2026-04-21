@@ -53,6 +53,8 @@ API_SECOND_SIGNAL_KEYS = {
     "date", "posteddate", "postedat", "createdat", "updatedat", "regdate",
     "regdt", "registdt", "modifiedat", "enddate", "closeddate", "deadline",
     "startdate", "opendate",
+    # LG / 공공기관 축약
+    "recenddatetime", "recstartdatetime", "recdatediff", "createymd",
     # 위치 (regnNm, arenm, rgNm 같은 한국식 축약 포함)
     "location", "region", "area", "city", "address", "workplace", "worklocation",
     "workregion", "loc", "regnnm", "rgnm", "arenm", "areanm",
@@ -282,6 +284,10 @@ def validate_api_config(config: dict) -> ValidationReport:
     if not item_path:
         return ValidationReport(ok=False, reason="source.item_path 비어있음")
 
+    # POST body — Playwright 가 캡처한 실제 요청 body. LG·토스 같이 검색조건이 body 에
+    # 담겨 보내지는 API 대응. request_body 가 없으면 기존대로 list_params 를 body 로 씀.
+    request_body = source.get("request_body")
+
     try:
         if method == "GET":
             response = requests.get(
@@ -291,9 +297,11 @@ def validate_api_config(config: dict) -> ValidationReport:
                 timeout=VALIDATOR_API_TIMEOUT,
             )
         elif method == "POST":
+            post_json = request_body if request_body is not None else list_params
             response = requests.post(
                 api_endpoint,
-                json=list_params,
+                json=post_json,
+                params=list_params if request_body is not None else None,
                 headers=headers,
                 timeout=VALIDATOR_API_TIMEOUT,
             )
@@ -620,6 +628,8 @@ EMBEDDED_TITLE_KEYS = [
     "pblntTitle", "boardTitle", "listSj", "bidNm",
     # 카카오 jobOfferTitle, 라인 title_en, 토스 post_title 등 추가 축약
     "jobOfferTitle", "title_en", "post_title",
+    # LG careers jobNoticeName, 일부 공공기관 variants
+    "jobNoticeName", "noticeTitle", "recruitName", "recruitNoticeName",
 ]
 
 # GraphQL/Gatsby/Strapi 의 edges[*].node 또는 { data: {...} } 같은 wrapper 패턴.

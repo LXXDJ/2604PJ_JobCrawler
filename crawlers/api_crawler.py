@@ -46,6 +46,8 @@ TITLE_KEYS = [
     "pblntTitle", "boardTitle", "listSj", "bidNm",
     # 카카오 jobOfferTitle, 라인 title_en 등
     "jobOfferTitle", "title_en", "post_title",
+    # LG careers jobNoticeName
+    "jobNoticeName", "noticeTitle", "recruitName", "recruitNoticeName",
 ]
 
 # GraphQL/Gatsby edges[*].node 같은 wrapper 패턴 — _pick 이 한 단계 내려가 재탐색.
@@ -68,8 +70,8 @@ ID_KEYS = [
     # 알바몬 recruitNo, 공공기관 pblntId 등
     "adId", "rcrtId", "recId", "recruitId", "recruitNo", "jobSeq", "postSeq",
     "giupSeq", "giupId", "pblntId",
-    # 카카오 jobOfferId, 라인 strapiId, 당근 ghId
-    "jobOfferId", "strapiId", "ghId",
+    # 카카오 jobOfferId, 라인 strapiId, 당근 ghId, LG jobNoticeId
+    "jobOfferId", "strapiId", "ghId", "jobNoticeId", "noticeId",
 ]
 LOCATION_KEYS = [
     "location", "locationName", "region", "regionName", "area", "cities",
@@ -114,10 +116,15 @@ def _api_call(
     timeout: int,
     max_retries: int,
     retry_backoff: float,
+    request_body: Any = None,
 ) -> Any:
     """
     API 호출 + 재시도. 실패 시 마지막 예외 raise.
-    GET 은 params 를 쿼리스트링으로, POST 는 JSON body 로 전달.
+    GET 은 params 를 쿼리스트링으로, POST 는:
+      - request_body 가 제공되면 그것을 JSON body 로, params 는 query string 으로
+      - request_body 없으면 params 를 JSON body 로 (기존 동작)
+
+    request_body: Playwright 가 캡처한 원본 POST body (LG·토스 등 검색조건 필수 API).
     """
     method_upper = method.upper()
     last_error = None
@@ -129,9 +136,15 @@ def _api_call(
                     endpoint, params=params, headers=headers, timeout=timeout,
                 )
             elif method_upper == "POST":
-                response = requests.post(
-                    endpoint, json=params, headers=headers, timeout=timeout,
-                )
+                if request_body is not None:
+                    response = requests.post(
+                        endpoint, params=params, json=request_body,
+                        headers=headers, timeout=timeout,
+                    )
+                else:
+                    response = requests.post(
+                        endpoint, json=params, headers=headers, timeout=timeout,
+                    )
             else:
                 raise ValueError(f"지원하지 않는 HTTP method: {method!r}")
 
@@ -378,6 +391,8 @@ def crawl(
     link_template = source.get("link_template", "")
     base_list_params = dict(source.get("list_params") or {})
     headers = _normalize_headers(source.get("request_headers") or {})
+    # POST body (검색조건 등) — LG·토스 같이 Playwright 가 캡처한 request payload.
+    request_body = source.get("request_body")
 
     detail_endpoint_template = source.get("detail_endpoint_template", "")
     detail_method = source.get("detail_method", "GET")
@@ -411,7 +426,8 @@ def crawl(
         first_params = dict(base_list_params)
         first_params[page_param] = start_page
         first_response = _api_call(
-            endpoint, method, first_params, headers, **http_kwargs,
+            endpoint, method, first_params, headers,
+            request_body=request_body, **http_kwargs,
         )
 
         total_pages_from_api = None
@@ -448,7 +464,8 @@ def crawl(
                 params[page_param] = page
                 try:
                     response_json = _api_call(
-                        endpoint, method, params, headers, **http_kwargs,
+                        endpoint, method, params, headers,
+                        request_body=request_body, **http_kwargs,
                     )
                 except Exception as e:
                     print(f"    [WARN] page={page} API 호출 실패 — 중단: "

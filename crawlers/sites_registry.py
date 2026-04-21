@@ -290,6 +290,17 @@ def _api_analysis_to_source(result, url: str) -> dict:
         "list_params": raw_params,
         "item_path": item_path,
     }
+    # POST body — Playwright 가 캡처한 post_data 를 request_body 로 저장.
+    # LG·토스 같이 POST 전용 + body 필수 API 대응. GET/None 이면 생략.
+    post_data = c.get("post_data")
+    if post_data and c.get("method", "").upper() == "POST":
+        try:
+            # 문자열로 잡힌 JSON 을 dict 로 파싱해두면 validator/api_crawler 가 바로 json= 로 전달.
+            parsed_body = json.loads(post_data) if isinstance(post_data, str) else post_data
+            source["request_body"] = parsed_body
+        except Exception:
+            # JSON 아니면 원본 문자열 그대로 (form-encoded 등)
+            source["request_body"] = post_data
     return source, page_param
 
 

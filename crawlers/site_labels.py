@@ -39,6 +39,15 @@ SITE_LABELS = {
     "gamejob": "게임잡",
     "mediajob": "미디어잡",
     "freemoa": "프리모아",
+    "lg": "LG 채용",
+    "busanjob": "부산일자리센터",
+    "incheon": "인천광역시",
+    "daegu": "대구광역시",
+    "saeil": "새일센터",
+    "designjob": "디자인채용포털",
+    "wishket": "위시켓",
+    "talentbank": "탤런트뱅크",
+    "elancer": "이랜서",
 }
 
 

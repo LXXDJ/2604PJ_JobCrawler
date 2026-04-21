@@ -166,6 +166,7 @@ def build_config_from_candidate(candidate: dict, url: str) -> dict:
         "api_endpoint": candidate["url"],
         "method": candidate["method"],
         "request_headers": candidate["request_headers"],
+        "post_data": candidate.get("post_data"),  # POST body 원본 (문자열)
         "response_shape": candidate["response_shape"],
         "response_sample": candidate["body_snippet"],
         "selection_source": "llm_retry",
@@ -345,6 +346,7 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
             "api_endpoint": best["url"],
             "method": best["method"],
             "request_headers": best["request_headers"],
+            "post_data": best.get("post_data"),  # POST body — LG·토스 등 대응
             "response_shape": best["response_shape"],
             "response_sample": best["body_snippet"],
             "selection_source": selection_source,
@@ -424,10 +426,19 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
                     except Exception:
                         return
 
+                    # POST body (request payload) — 검색조건이 body 에 들어가는 API 대응.
+                    # LG(retrieveJobNoticesList)·토스·우아한처럼 GET 405 / POST body 필수인 케이스.
+                    post_data = None
+                    try:
+                        post_data = response.request.post_data
+                    except Exception:
+                        pass
+
                     captured.append({
                         "url": response.url,
                         "method": response.request.method,
                         "request_headers": dict(response.request.headers),
+                        "post_data": post_data,  # POST body raw 문자열 (보통 JSON). GET 이면 None.
                         "body_snippet": text[:800],
                         "response_shape": self._infer_shape(parsed),
                         "size": size,

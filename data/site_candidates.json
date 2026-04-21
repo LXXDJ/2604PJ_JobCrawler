@@ -382,9 +382,8 @@
   {
     "category": "대기업_채용",
     "name": "LG",
-    "url": "https://careers.lge.com/",
-    "skip": true,
-    "skip_reason": "LG careers 공식 서브도메인 DNS/Timeout 모두 실패 — 정확한 URL 미확정"
+    "url": "https://careers.lg.com/apply",
+    "note": "사용자 확인 반영 — careers.lg.com (lg.com 이지 lge.com 아님)"
   },
   {
     "category": "대기업_채용",
