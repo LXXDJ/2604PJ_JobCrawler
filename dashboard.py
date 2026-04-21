@@ -9,6 +9,7 @@ JobCrawler 대시보드 (Streamlit).
 """
 
 import os
+import sys
 import sqlite3
 import pandas as pd
 import plotly.express as px
@@ -17,30 +18,9 @@ import streamlit as st
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(ROOT, "data", "jobs.db")
 
-# site_id → 사용자 노출용 한글 라벨. DB 의 source 컬럼은 그대로 두고 표시만 변환.
-SITE_LABELS = {
-    "hanin": "재캄보디아한인회",
-    "siemreap": "시엠립한인회",
-    "camhr": "CamHR",
-    "jobkorea": "잡코리아",
-    "incruit": "인크루트",
-    "wanted": "원티드",
-    "ppomppu": "뽐뿌 구인정보",
-    "alba": "알바천국",
-    "radiokorea": "라디오코리아",
-    "rocketpunch": "로켓펀치",
-    "jumpit": "점핏",
-    "saramin": "사람인",
-    "jobplanet": "잡플래닛",
-    "peoplenjob": "피플앤잡",
-    "career": "커리어",
-    "findall": "벼룩시장",
-    "hibrain": "하이브레인",
-}
-
-
-def label(sid: str) -> str:
-    return SITE_LABELS.get(sid, sid)
+# site_id → 한글 라벨 매핑은 crawlers/site_labels.py 에 중앙화 (slack_notifier 와 공유).
+sys.path.insert(0, os.path.join(ROOT, "crawlers"))
+from site_labels import SITE_LABELS, label  # noqa: E402 — sys.path 세팅 이후여야 함
 
 
 st.set_page_config(page_title="JobCrawler Dashboard", layout="wide")

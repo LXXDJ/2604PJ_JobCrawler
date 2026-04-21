@@ -14,6 +14,8 @@ Slack Incoming Webhook으로 헬스체크 결과 전송.
 import json
 import requests
 
+from site_labels import label
+
 
 def send(webhook_url: str, report, *, only_issues: bool = True, timeout: int = 10) -> bool:
     """
@@ -101,7 +103,7 @@ def _build_payload(report) -> dict:
         blocks.append({"type": "divider"})
         for site in problem_sites:
             badge = {"error": ":x:", "warn": ":warning:"}[site.status]
-            lines = [f"{badge} *{site.site_id}*"]
+            lines = [f"{badge} *{label(site.site_id)}*"]
             for issue in site.issues:
                 lines.append(f"• {issue}")
             blocks.append({
@@ -133,16 +135,17 @@ def _build_crawl_summary_payload(per_site_stats, started_at, finished_at, elapse
     # 성공 사이트 + 실패 사이트를 한 덩어리 mrkdwn 으로 — 사이트 수가 많아져도 블록 수 폭발 안 함
     lines = []
     for s in per_site_stats:
+        name = label(s["site_id"])
         if s["status"] == "ok":
             lines.append(
-                f":white_check_mark: *{s['site_id']}* — 신규 {s.get('new_count') or 0}, "
+                f":white_check_mark: *{name}* — 신규 {s.get('new_count') or 0}, "
                 f"재확인 {s.get('updated_count') or 0}"
             )
         else:
             err = (s.get("error") or "").strip().replace("\n", " ")
             if len(err) > 200:
                 err = err[:200] + "…"
-            lines.append(f":x: *{s['site_id']}* — {err or 'unknown error'}")
+            lines.append(f":x: *{name}* — {err or 'unknown error'}")
 
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": header_text}},
