@@ -127,7 +127,7 @@
         "[로에일/니브] 한남동 쇼룸 세일즈 스테프 모집(여성의류 브랜드)"
       ]
     },
-    "enabled": false
+    "enabled": true
   },
   {
     "site_id": "camhr",
@@ -272,7 +272,7 @@
         "[글로벌 부문]시니어 글로벌 마케터(북미)"
       ]
     },
-    "enabled": false
+    "enabled": true
   },
   {
     "site_id": "ppomppu",
