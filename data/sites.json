@@ -182,7 +182,9 @@
     "requires_render": false,
     "source": {
       "list_url": "https://job.incruit.com/jobdb_list/searchjob.asp",
-      "list_params": {},
+      "list_params": {
+        "today": "y"
+      },
       "base_url": "https://job.incruit.com",
       "selectors": {
         "list_rows": "ul.c_row",
