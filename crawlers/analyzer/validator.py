@@ -340,11 +340,29 @@ def validate_api_config(config: dict) -> ValidationReport:
             items_extracted=len(items),
         )
 
-    # --- 2단계 중첩 자동 탐지 ---
+    # --- 자동 path 재탐색 (Gatsby/Strapi/GraphQL 대응) ---
+    # Playwright 가 item_path 를 '첫 list' 기준으로 잡으면 당근/라인 같은 Gatsby
+    # page-data 에선 header_entries(4) · locales.edges(1) 등 노이즈 배열이 먼저 잡힘.
+    # 실제 공고 배열은 같은 응답 안 다른 경로에 있음 — _find_best_title_array 로 응답
+    # 전체를 walk 해서 title-rich 배열 경로 자동 발견 후 item_path 업그레이드.
+    outer_sample_has_title = any(
+        isinstance(it, dict) and _pick_title(it) for it in items[:5]
+    )
+    if not outer_sample_has_title:
+        better_path, better_list = _find_best_title_array(payload)
+        # 원 item_path 보다 명백히 큰 배열 + 제목 매치 존재해야 전환
+        if better_path and len(better_list) > max(len(items), MIN_LIST_ROWS):
+            source["item_path"] = better_path
+            items = better_list
+            print(
+                f"      [validator] item_path 재탐색: {item_path!r} → {better_path!r} "
+                f"({len(items)}건, 제목 풍부)"
+            )
+
+    # --- 2단계 중첩 자동 탐지 (위 재탐색도 실패한 경우 폴백) ---
     # 외부 아이템들이 제목 필드를 전혀 안 갖고 있지만, 각 아이템 안에 "제목 있는 dict
     # 리스트" 필드가 있다면 그게 실제 공고 리스트. 벼룩시장(findall) 의
     # data.partTimeJobList[*].jobAdList 같은 케이스.
-    # [*] 구문으로 item_path 를 업그레이드하고 items 도 flatten 한 걸로 교체.
     outer_sample_has_title = any(
         isinstance(it, dict) and _pick_title(it) for it in items[:5]
     )
@@ -484,6 +502,58 @@ def _has_second_signal(item: dict) -> bool:
     return False
 
 
+def _find_best_title_array(payload: Any) -> tuple[Optional[str], list]:
+    """응답 전체를 walk 해서 'title 있는 dict 가 가장 많은 배열' 의 경로 + 배열 반환.
+
+    Playwright 의 _infer_shape 가 '첫 list' 기준으로 item_path 를 잡을 때, 실제 공고
+    배열이 더 깊은 경로에 있거나 뒤에 있으면 놓치는 문제 해결용. 당근
+    (result.data.allDepartmentFilteredJobPost.nodes, 49건) / 라인
+    (result.data.allStrapiJobs.edges, 364건) 이 정확히 이 케이스.
+
+    반환: (dot-path, list). 탐색 실패시 (None, []).
+    """
+    best_path: Optional[str] = None
+    best_list: list = []
+    best_count = 0
+
+    def walk(obj: Any, path: str):
+        nonlocal best_path, best_list, best_count
+        # 배열 + 첫 아이템이 dict 이면 이 배열의 title 매치 수 집계
+        if isinstance(obj, list) and obj and all(isinstance(x, dict) for x in obj[:5]):
+            # _pick_title 은 wrapper unwrap(node/data/attributes) 지원 —
+            # 라인 edges[i].node.title 형태도 잡힌다.
+            count = sum(1 for x in obj if isinstance(x, dict) and _pick_title(x))
+            if count > best_count:
+                best_path = path
+                best_list = obj
+                best_count = count
+        # dict 재귀
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                new_path = f"{path}.{k}" if path else k
+                walk(v, new_path)
+        # list 재귀는 생략 — item_path 는 list 를 가리키는 것이지 list 내부 index 재귀 아님
+
+    walk(payload, "")
+
+    # wrapper unwrap 시도 — 모든 아이템이 {node: {...}} 같은 구조면 unwrap 해서
+    # 2차 시그널 필드가 직접 item top-level 에 보이도록. item_path 는 [*].wrapper 로.
+    if best_list and best_path:
+        for wrapper in TITLE_WRAPPER_KEYS:
+            if all(
+                isinstance(it, dict) and wrapper in it and isinstance(it[wrapper], dict)
+                for it in best_list
+            ):
+                unwrapped = [it[wrapper] for it in best_list]
+                # unwrap 후 title 매치 수가 감소하지 않아야 유의미
+                new_count = sum(1 for x in unwrapped if _pick_title(x))
+                if new_count >= best_count:
+                    return f"{best_path}[*].{wrapper}", unwrapped
+                break
+
+    return best_path, best_list
+
+
 def _detect_nested_list_field(outer_items: list) -> Optional[str]:
     """외부 아이템들이 공통적으로 가진 'dict 리스트' 필드명을 찾는다.
 
@@ -548,7 +618,14 @@ EMBEDDED_TITLE_KEYS = [
     # 한국 사이트 축약 — 알바몬 recruitTitle, 공공기관 rcrtTitle/empmnTitle 등
     "recruitTitle", "postingTitle", "rcrtTitle", "rcrtSj", "empmnTitle",
     "pblntTitle", "boardTitle", "listSj", "bidNm",
+    # 카카오 jobOfferTitle, 라인 title_en, 토스 post_title 등 추가 축약
+    "jobOfferTitle", "title_en", "post_title",
 ]
+
+# GraphQL/Gatsby/Strapi 의 edges[*].node 또는 { data: {...} } 같은 wrapper 패턴.
+# _pick_title 이 아이템 안에서 바로 title 못 찾으면 이 키들을 한 단계 unwrap 해서
+# 재탐색. 라인 careers (allStrapiJobs.edges[i].node.title) 대응용.
+TITLE_WRAPPER_KEYS = ("node", "data", "attributes", "fields", "item")
 
 
 def validate_embedded_json_config(
@@ -785,16 +862,29 @@ def _fetch_state_via_render(url: str, source: dict) -> Any:
             browser.close()
 
 
-def _pick_title(item: dict) -> str:
-    """아이템 dict 에서 제목 후보 필드 첫 매치 반환."""
+def _pick_title(item: dict, _depth: int = 0) -> str:
+    """아이템 dict 에서 제목 후보 필드 첫 매치 반환.
+
+    2가지 nested 패턴 대응:
+      1. `{"title": {"text": "..."}}` — title 값이 dict 인 경우 text/name/value 탐색
+      2. `{"node": {...}, ...}` / `{"data": {...}}` 같은 wrapper — 라인 edges[*].node,
+         Gatsby/Strapi 류 공통 패턴. 바로 title 못 찾으면 wrapper 안쪽으로 1단계 recurse.
+    """
     for key in EMBEDDED_TITLE_KEYS:
         if key in item:
             v = item[key]
             if isinstance(v, str):
                 return v.strip()
-            # nested dict (예: {"title": {"text": "..."}}) — 흔한 몇 가지만 시도
             if isinstance(v, dict):
                 for inner in ("text", "name", "value"):
                     if inner in v and isinstance(v[inner], str):
                         return v[inner].strip()
+
+    # wrapper 1단계 unwrap (라인 node, Strapi attributes 등). 재귀 깊이 1로 제한.
+    if _depth < 1:
+        for wrapper in TITLE_WRAPPER_KEYS:
+            if wrapper in item and isinstance(item[wrapper], dict):
+                inner = _pick_title(item[wrapper], _depth=_depth + 1)
+                if inner:
+                    return inner
     return ""

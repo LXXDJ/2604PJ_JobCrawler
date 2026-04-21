@@ -1013,5 +1013,139 @@
         "Staff, Back-end engineer (WMS Inbound)"
       ]
     }
+  },
+  {
+    "site_id": "kakao",
+    "url": "https://careers.kakao.com/jobs",
+    "site_type": "api_discovered",
+    "added_at": "2026-04-21T07:24:34.942703+00:00",
+    "extraction_method": "api",
+    "requires_render": false,
+    "source": {
+      "api_endpoint": "https://careers.kakao.com/public/api/job-list",
+      "method": "GET",
+      "base_url": "https://careers.kakao.com",
+      "request_headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "referer": "https://careers.kakao.com/jobs",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "accept": "application/json, text/plain, */*",
+        "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
+        "sec-ch-ua-mobile": "?0"
+      },
+      "list_params": {
+        "skillSet": "",
+        "part": "TECHNOLOGY",
+        "company": "KAKAO",
+        "employeeType": ""
+      },
+      "item_path": "jobList"
+    },
+    "pagination": {
+      "type": "api_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 13,
+      "fields_matched": {
+        "title": 13,
+        "second_signal": 13
+      },
+      "sample_titles": [
+        "MLOps Engineer (경력)",
+        "Machine Learning Engineer (Search) (경력)",
+        "보이스톡 / 페이스톡 Server 엔지니어 (경력)"
+      ]
+    }
+  },
+  {
+    "site_id": "daangn",
+    "url": "https://about.daangn.com/jobs/",
+    "site_type": "api_discovered",
+    "added_at": "2026-04-21T07:26:59.559125+00:00",
+    "extraction_method": "api",
+    "requires_render": false,
+    "source": {
+      "api_endpoint": "https://about.daangn.com/page-data/jobs/page-data.json",
+      "method": "GET",
+      "base_url": "https://about.daangn.com",
+      "request_headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "referer": "https://about.daangn.com/jobs/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
+        "sec-ch-ua-mobile": "?0"
+      },
+      "list_params": {},
+      "item_path": "result.data.allDepartmentFilteredJobPost.nodes"
+    },
+    "pagination": {
+      "type": "api_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 49,
+      "fields_matched": {
+        "title": 49,
+        "second_signal": 49
+      },
+      "sample_titles": [
+        "AD Sales Manager | 광고 (세일즈, Agency)",
+        "AD Sales Manager | 광고 (세일즈, Client)",
+        "Brand Marketer | 마케팅"
+      ]
+    }
+  },
+  {
+    "site_id": "linecorp",
+    "url": "https://careers.linecorp.com/ko/jobs",
+    "site_type": "api_discovered",
+    "added_at": "2026-04-21T07:28:31.248682+00:00",
+    "extraction_method": "api",
+    "requires_render": false,
+    "source": {
+      "api_endpoint": "https://careers.linecorp.com/page-data/ko/jobs/page-data.json",
+      "method": "GET",
+      "base_url": "https://careers.linecorp.com",
+      "request_headers": {
+        "sentry-trace": "b19d8dbd08a4472297867ef095b58e18-a6054ca5f32345ca-0",
+        "sec-ch-ua-platform": "\"Windows\"",
+        "referer": "https://careers.linecorp.com/ko/jobs/",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
+        "sec-ch-ua-mobile": "?0",
+        "baggage": "sentry-environment=production,sentry-release=4653b147cf4c35fa27603cf83928ae14c912f4d5,sentry-public_key=6843636319e64077a9a64ab2543f71e8,sentry-trace_id=b19d8dbd08a4472297867ef095b58e18,sentry-sample_rate=0.2,sentry-sampled=false"
+      },
+      "list_params": {},
+      "item_path": "result.data.allStrapiJobs.edges[*].node"
+    },
+    "pagination": {
+      "type": "api_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 364,
+      "fields_matched": {
+        "title": 364,
+        "second_signal": 364
+      },
+      "sample_titles": [
+        "LINE Taiwan_Enterprise Business_Sales Manager",
+        "일본어 전문 통번역 프리랜서",
+        "LINE Taiwan_Senior Strategic Business Development Manager"
+      ]
+    }
   }
 ]

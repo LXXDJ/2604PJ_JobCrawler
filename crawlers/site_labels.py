@@ -31,6 +31,9 @@ SITE_LABELS = {
     "samsungcareers": "삼성 채용",
     "kt": "KT 채용",
     "coupang": "쿠팡 채용",
+    "kakao": "카카오 채용",
+    "daangn": "당근 채용",
+    "linecorp": "라인 채용",
 }
 
 

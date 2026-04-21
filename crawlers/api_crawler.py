@@ -44,7 +44,12 @@ TITLE_KEYS = [
     # 한국식 축약 — validator EMBEDDED_TITLE_KEYS 와 보조 맞춤
     "recruitTitle", "postingTitle", "rcrtTitle", "rcrtSj", "empmnTitle",
     "pblntTitle", "boardTitle", "listSj", "bidNm",
+    # 카카오 jobOfferTitle, 라인 title_en 등
+    "jobOfferTitle", "title_en", "post_title",
 ]
+
+# GraphQL/Gatsby edges[*].node 같은 wrapper 패턴 — _pick 이 한 단계 내려가 재탐색.
+WRAPPER_KEYS = ("node", "data", "attributes", "fields", "item")
 COMPANY_KEYS = [
     "company", "companyName", "compNm", "giupNm", "corpName",
     "employer", "employerName", "orgName",
@@ -63,6 +68,8 @@ ID_KEYS = [
     # 알바몬 recruitNo, 공공기관 pblntId 등
     "adId", "rcrtId", "recId", "recruitId", "recruitNo", "jobSeq", "postSeq",
     "giupSeq", "giupId", "pblntId",
+    # 카카오 jobOfferId, 라인 strapiId, 당근 ghId
+    "jobOfferId", "strapiId", "ghId",
 ]
 LOCATION_KEYS = [
     "location", "locationName", "region", "regionName", "area", "cities",
@@ -191,8 +198,11 @@ def _traverse_path(state: Any, path: str) -> Any:
     return cur
 
 
-def _pick(item: dict, keys: list) -> str:
-    """item 에서 keys 중 첫 유효값 꺼내기. dict 값이면 name/text/value 내려 시도."""
+def _pick(item: dict, keys: list, _depth: int = 0) -> str:
+    """item 에서 keys 중 첫 유효값 꺼내기. dict 값이면 name/text/value 내려 시도.
+
+    wrapper 1단계 unwrap (node/data/attributes) — 라인 edges[i].node.title 류 대응.
+    """
     for k in keys:
         if k not in item:
             continue
@@ -209,6 +219,13 @@ def _pick(item: dict, keys: list) -> str:
             for inner in ("label", "name", "text", "value", "title", "company"):
                 if inner in v and v[inner]:
                     return str(v[inner]).strip()
+    # wrapper 1단계 unwrap — item 자체가 {node: {title, company, ...}} 꼴일 때.
+    if _depth < 1:
+        for wrapper in WRAPPER_KEYS:
+            if wrapper in item and isinstance(item[wrapper], dict):
+                inner = _pick(item[wrapper], keys, _depth=_depth + 1)
+                if inner:
+                    return inner
     return ""
 
 
