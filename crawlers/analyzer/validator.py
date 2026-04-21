@@ -43,25 +43,30 @@ MIN_AVG_TITLE_LEN_API = 8   # 필터코드(2~6자)는 걸러내고 짧은 공고
 MIN_SECOND_SIGNAL_RATIO = 0.5  # 아이템 중 회사/날짜/URL/위치 중 하나라도 가진 비율 하한
 
 # 아이템에서 "2차 시그널" 로 인정할 필드명 (snake/camel/한국어축약 혼재 허용).
+# _normalize_key 가 소문자화 + 언더스코어/하이픈 제거하므로 여기 값은 전부 소문자 연속체.
 API_SECOND_SIGNAL_KEYS = {
     # 회사/작성자
-    "company", "companyname", "compnm", "corp", "corpname", "corp_name",
+    "company", "companyname", "compnm", "corp", "corpname",
     "author", "employer", "giupnm", "giupname", "orannm", "writer", "writernm",
+    "mbizname", "bizname",
     # 날짜 (등록/마감/갱신 어느거든)
     "date", "posteddate", "postedat", "createdat", "updatedat", "regdate",
     "regdt", "registdt", "modifiedat", "enddate", "closeddate", "deadline",
     "startdate", "opendate",
-    # 위치
+    # 위치 (regnNm, arenm, rgNm 같은 한국식 축약 포함)
     "location", "region", "area", "city", "address", "workplace", "worklocation",
-    "workregion", "loc",
+    "workregion", "loc", "regnnm", "rgnm", "arenm", "areanm",
     # URL/링크
-    "url", "link", "href", "detailurl", "jobUrl", "apply_url", "applyurl",
+    "url", "link", "href", "detailurl", "joburl", "applyurl",
     "permalink", "detailhref",
-    # 급여/근무형태
+    # 급여/근무형태 (salAmt, salKind, payMin, wageType 등 축약형)
     "salary", "pay", "salarymin", "salarymax", "wage",
-    "employmenttype", "jobtype", "worktype", "contracttype",
+    "salamt", "salkind", "salpossible", "salpaytype", "paymonth", "paymin", "paymax",
+    "employmenttype", "jobtype", "worktype", "contracttype", "wrktype", "wrktmcd",
+    # ID/공고코드 (adId, rcrtId, postSeq 같이 URL 생성용)
+    "adid", "jobid", "postid", "recruitid", "rcrtid", "postseq", "jobseq",
     # 카테고리 (약한 시그널이지만 있는 경우 많음)
-    "category", "jobcategory", "occupation", "industry",
+    "category", "jobcategory", "occupation", "industry", "jobcd", "jobcdlist", "jobkolist",
 }
 
 # 코드테이블 패턴 — 아이템이 거의 이 필드들로만 구성되면 "메타데이터" 로 간주.
@@ -335,6 +340,37 @@ def validate_api_config(config: dict) -> ValidationReport:
             items_extracted=len(items),
         )
 
+    # --- 2단계 중첩 자동 탐지 ---
+    # 외부 아이템들이 제목 필드를 전혀 안 갖고 있지만, 각 아이템 안에 "제목 있는 dict
+    # 리스트" 필드가 있다면 그게 실제 공고 리스트. 벼룩시장(findall) 의
+    # data.partTimeJobList[*].jobAdList 같은 케이스.
+    # [*] 구문으로 item_path 를 업그레이드하고 items 도 flatten 한 걸로 교체.
+    outer_sample_has_title = any(
+        isinstance(it, dict) and _pick_title(it) for it in items[:5]
+    )
+    if not outer_sample_has_title:
+        nested_field = _detect_nested_list_field(items)
+        if nested_field:
+            flattened: list = []
+            for it in items:
+                if isinstance(it, dict):
+                    sub = it.get(nested_field)
+                    if isinstance(sub, list):
+                        flattened.extend(sub)
+            if len(flattened) >= MIN_LIST_ROWS:
+                # item_path 를 2단계 형태로 업그레이드 — 저장/크롤러 모두 [*] 지원
+                new_item_path = (
+                    f"{item_path}[*].{nested_field}" if item_path else f"[*].{nested_field}"
+                )
+                # source 는 config["source"] 의 레퍼런스 — mutate 하면 sites.json 에도
+                # 새 경로로 저장된다 (analyzer → validator → registry 까지 같은 dict 공유).
+                source["item_path"] = new_item_path
+                items = flattened
+                print(
+                    f"      [validator] item_path 2단계 업그레이드: "
+                    f"{item_path!r} → {new_item_path!r} ({len(flattened)}건)"
+                )
+
     titles: list = []
     matched = 0
     for item in items:
@@ -446,6 +482,38 @@ def _has_second_signal(item: dict) -> bool:
                 continue
             return True
     return False
+
+
+def _detect_nested_list_field(outer_items: list) -> Optional[str]:
+    """외부 아이템들이 공통적으로 가진 'dict 리스트' 필드명을 찾는다.
+
+    반환 조건:
+        - 최소 2개 외부 아이템에 같은 필드명의 list-of-dict 가 존재
+        - 그 내부 아이템에 제목성 필드가 보임 (임의 샘플 기준)
+        - 그런 필드가 여러 개면 제목성 매치가 가장 많은 것 선택
+
+    벼룩시장의 `data.partTimeJobList[*].jobAdList` 같은 2단계 구조 자동 감지용.
+    """
+    if not outer_items:
+        return None
+    candidate_scores: dict = {}
+    for it in outer_items[:10]:  # 앞 10개만 샘플
+        if not isinstance(it, dict):
+            continue
+        for k, v in it.items():
+            if not isinstance(v, list) or not v:
+                continue
+            if not isinstance(v[0], dict):
+                continue
+            # 해당 sub-list 의 아이템들에 제목이 얼마나 있는지 집계
+            hit = sum(1 for x in v[:5] if isinstance(x, dict) and _pick_title(x))
+            if hit > 0:
+                candidate_scores[k] = candidate_scores.get(k, 0) + hit
+    if not candidate_scores:
+        return None
+    # 제목 매치 총합이 가장 높은 필드 선택
+    best = max(candidate_scores.items(), key=lambda kv: kv[1])
+    return best[0] if best[1] >= 2 else None
 
 
 def _is_code_table_pattern(items: list) -> bool:
@@ -631,9 +699,32 @@ def validate_embedded_json_config(
 
 
 def _traverse_path(state: Any, path: str) -> Any:
-    """dot-notation path 로 state 내부 값에 도달. 실패 시 None."""
+    """dot-notation path 로 state 내부 값에 도달. 실패 시 None.
+
+    [*] 와일드카드: `data.outer[*].inner` → outer 배열의 각 아이템에서 inner 를 꺼내 flatten.
+    벼룩시장(findall) 처럼 `data.partTimeJobList[0..].jobAdList` 같은 2단계 중첩 공고 리스트
+    대응. inner 가 list 면 extend, scalar/dict 면 append.
+    """
     if not path:
         return state
+    if "[*]" in path:
+        before, _, after = path.partition("[*].")
+        if not after:
+            # 잘못된 구문 (`path[*]` 뒤에 아무 것도 없음)
+            return None
+        outer = _traverse_path(state, before) if before else state
+        if not isinstance(outer, list):
+            return None
+        merged: list = []
+        for item in outer:
+            inner = _traverse_path(item, after)
+            if inner is None:
+                continue
+            if isinstance(inner, list):
+                merged.extend(inner)
+            else:
+                merged.append(inner)
+        return merged
     cur = state
     for part in path.split("."):
         if isinstance(cur, dict):

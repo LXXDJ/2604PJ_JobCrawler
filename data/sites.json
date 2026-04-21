@@ -704,5 +704,50 @@
         "[월최대 450 가능] 쿠팡CLS 현장관리 및 사무 행정(경력무관) 채용"
       ]
     }
+  },
+  {
+    "site_id": "findall",
+    "url": "https://www.findall.co.kr/job",
+    "site_type": "api_discovered",
+    "added_at": "2026-04-21T05:40:46.776383+00:00",
+    "extraction_method": "api",
+    "requires_render": false,
+    "source": {
+      "api_endpoint": "https://www.findjob.co.kr/job-info/api/v1/main/mainPartTimeJobList",
+      "method": "GET",
+      "base_url": "https://www.findall.co.kr",
+      "request_headers": {
+        "sec-ch-ua-platform": "\"Windows\"",
+        "referer": "https://www.findjob.co.kr/",
+        "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
+        "sec-ch-ua-mobile": "?0",
+        "access-control-allow-credentials": "true",
+        "x-content-type-options": "nosniff",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "accept": "application/json, text/plain, */*"
+      },
+      "list_params": {},
+      "item_path": "data.partTimeJobList[*].jobAdList"
+    },
+    "pagination": {
+      "type": "api_param",
+      "param": "page",
+      "start": 1
+    },
+    "validated": true,
+    "validation_report": {
+      "ok": true,
+      "reason": "",
+      "items_extracted": 18,
+      "fields_matched": {
+        "title": 18,
+        "second_signal": 18
+      },
+      "sample_titles": [
+        "기업물류 / 월600이상 [중장년가능] / [외국인가능] / 나이경력무관 / 초보가능/시흥",
+        "[마켓컬리]새벽배송/입차시간 센터마다 상이/냉탑배송/외국인가능",
+        "화성시우정읍 숙식제공/,교포가능/단순 현장직, 단순생산직 /누구나 /  토목가설재 /"
+      ]
+    }
   }
 ]

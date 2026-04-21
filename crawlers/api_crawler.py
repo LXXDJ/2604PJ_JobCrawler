@@ -56,15 +56,23 @@ DATE_KEYS = [
 ]
 ID_KEYS = [
     "id", "jobId", "postId", "seq", "seqNo", "articleId",
+    # 한국식 축약 — 벼룩시장 adId, 고용정보원 rcrtId, 사람인 계열 postSeq 등
+    "adId", "rcrtId", "recId", "recruitId", "jobSeq", "postSeq",
+    "giupSeq", "giupId", "pblntId",
 ]
 LOCATION_KEYS = [
     "location", "locationName", "region", "regionName", "area", "cities",
+    # 한국식: regnNm (지역명), arenm, rgNm
+    "regnNm", "areNm", "rgNm", "workRegion",
 ]
 SALARY_KEYS = [
     "salary", "salaryText", "wage", "pay", "salaryId",
+    # 한국식: salAmt, salKind, payMonth
+    "salAmt", "salKind", "payMonth",
 ]
 JOB_TYPE_KEYS = [
     "jobType", "employmentType", "termId", "term",
+    "wrkType",  # 벼룩시장
 ]
 
 # 신규 공고 상세 조회 시 본문 후보 필드 (detail 응답에서 긁어옴)
@@ -139,9 +147,30 @@ def _api_call(
 # ============================================================
 
 def _traverse_path(state: Any, path: str) -> Any:
-    """dot-notation path 로 state 내부 값 도달. 실패 시 None."""
+    """dot-notation path 로 state 내부 값 도달. 실패 시 None.
+
+    [*] 와일드카드: `outer[*].inner` → outer 배열 각 아이템에서 inner 를 꺼내 flatten.
+    벼룩시장(findall) 처럼 2단계 중첩 공고 리스트 대응 — validator 의 동명 함수와 동일 계약.
+    """
     if not path:
         return state
+    if "[*]" in path:
+        before, _, after = path.partition("[*].")
+        if not after:
+            return None
+        outer = _traverse_path(state, before) if before else state
+        if not isinstance(outer, list):
+            return None
+        merged: list = []
+        for item in outer:
+            inner = _traverse_path(item, after)
+            if inner is None:
+                continue
+            if isinstance(inner, list):
+                merged.extend(inner)
+            else:
+                merged.append(inner)
+        return merged
     cur = state
     for part in path.split("."):
         if isinstance(cur, dict):

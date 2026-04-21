@@ -526,10 +526,24 @@ def cmd_add(url: str):
         return
 
     # --- 저장 (validated=true 로 마킹) ---
+    # 주의: build_entry 를 쓰지 않고 new_config 를 직접 사용.
+    # 이유: validator 가 2단계 중첩 자동 탐지로 source["item_path"] 를 [*] 형태로 업그레이드한
+    # 경우, build_entry 는 result.config 에서 재계산해서 덮어쓰므로 mutation 이 사라진다.
+    # 여기 시점엔 이미 new_config 가 "검증 통과한 최종 형태" 이므로 그대로 저장.
+    from datetime import datetime, timezone
     report_dict = report.to_dict()
     if retry_history:
         report_dict["retry_history"] = retry_history
-    entries.append(sites_registry.build_entry(result, site_id, validation_report=report_dict))
+    entry = {
+        "site_id": site_id,
+        "url": url,
+        "site_type": result.site_type.value,
+        "added_at": datetime.now(timezone.utc).isoformat(),
+        **new_config,
+        "validated": True,
+        "validation_report": report_dict,
+    }
+    entries.append(entry)
     sites_registry.save_all(SITES_JSON_PATH, entries)
 
     print(f"\n[OK] 등록 완료: {SITES_JSON_PATH}")

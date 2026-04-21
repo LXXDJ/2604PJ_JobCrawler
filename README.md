@@ -36,9 +36,9 @@
 | 난이도 | 특징 | 필요한 기법 | 사이트 수 |
 |--------|------|-------------|-----------|
 | **하** | 정적 HTML, 봇차단 없음 | `requests` + CSS selector (heuristic 자동) | 10 |
-| **중** | SPA, JSON API 뒤에 목록 숨김 | Playwright 로 내부 API 스니핑 + LLM Ranker | 4 |
+| **중** | SPA, JSON API 뒤에 목록 숨김 | Playwright 로 내부 API 스니핑 + LLM Ranker | 5 |
 | **상** | JA3/TLS 지문 탐지로 403 | curl_cffi (Chrome TLS impersonate) | 1 |
-| 미해결 | Form-submit / SPA 매핑 / 쿠키 세션 | 추가 엔지니어링 필요 | 5+ |
+| 미해결 | OpenAPI 전용 / 인터랙티브 / 쿠키 세션 | 추가 엔지니어링 or 별도 경로 | 3~ |
 
 ---
 
@@ -67,7 +67,8 @@
 **도입 기법**:
 1. `playwright_discovery.py` — 헤드리스 Chromium 으로 페이지를 실제로 띄워 **네트워크 트래픽을 가로채** `/api/*.json` 후보 수집
 2. 규칙 점수(응답 크기·JSON 배열 길이·경로 패턴) 상위를 **LLM Ranker** 에 넘겨 "메타데이터/필터옵션 API 말고 진짜 공고 리스트" 재선별
-3. 수동 polish 단계에서 필요한 헤더·파라미터(`referer`, `x-rocket-*`, `jp-ssr-auth` 등)와 `item_path` 경로 확정
+3. validator 가 응답 구조 검증 (제목/회사/URL 등 2차 시그널 + 2단계 중첩 자동 탐지 `[*]` 구문)
+4. 실패하면 LLM Ranker 재시도 루프 (`exclude` 로 이전 pick 제외)
 
 | site_id | URL | API 엔드포인트 | 특기사항 |
 |---------|-----|----------------|----------|
@@ -76,6 +77,7 @@
 | rocketpunch | https://www.rocketpunch.com/jobs | `/api/proxy/jobs` | `x-rocket-client-id`, `x-rocket-app-key` 등 8종 커스텀 헤더 |
 | jumpit | https://www.jumpit.co.kr/positions | `jumpit-api.saramin.co.kr/api/positions` | 사람인 계열 (도메인만 다름) |
 | jobplanet | https://www.jobplanet.co.kr/job | `/api/v3/job/postings` | `jp-ssr-auth` 토큰 (고정값) + `jp-os-type: mobile_web` |
+| findall | https://www.findall.co.kr/job | `findjob.co.kr/.../mainPartTimeJobList` | **2단계 중첩** 응답 — validator 가 `data.partTimeJobList[*].jobAdList` 로 item_path 자동 업그레이드 |
 
 > **링커리어·알바몬 제외 이유** (역사적): LLM Ranker 가 GraphQL 필터옵션 / 브랜드 코드 API 를 1위로 오인식해서 `scripts/cleanup_bad_entries.py` 로 제거했었음. 이후 아래 ① + ② 로 대응 완료.
 >
@@ -116,14 +118,16 @@ response = cffi_requests.get(url, impersonate="chrome131", headers=..., ...)
 
 발견은 했지만 현재 파이프라인으로 못 잡은 사이트들. 방어 패턴별로 묶어 기록.
 
-#### ① Form-submit 기반 (초기 HTML 에 공고 없음)
+#### ① Form-submit / OpenAPI 전용 (스크래핑 비권장)
 
-검색 조건을 POST 로 보내면 AJAX 로 결과가 내려오는 구조. 초기 페이지 GET 응답에는 리스트 0건.
+검색 버튼 클릭/로그인 이후에만 공고가 표시되는 인터랙티브 사이트. 분석 결과 두 사이트 모두 **공공기관 OpenAPI 를 정식 경로로 제공** — 스크래핑보다 API 키 발급 쪽이 정석.
 
-| 사이트 | 필요한 작업 |
-|--------|-------------|
-| 고용24 (work24) | Playwright 로 form submit → 결과 페이지 렌더 후 DOM 추출 |
-| 알리오 (alio) | AJAX 엔드포인트 직접 캡처 후 api_crawler 수동 등록 |
+| 사이트 | 권장 경로 |
+|--------|-----------|
+| 고용24 (work24) | [고용24 OpenAPI](https://www.work24.go.kr/cm/openApi/openApiInfoView.do) — 키 발급 후 REST 호출 |
+| 알리오 (alio) | 공공데이터포털 [공공기관 채용정보 API](https://www.data.go.kr/) — 키 발급 필요 |
+
+→ 스크래핑 파이프라인 범위 밖. 필요하면 `hardcoded_crawls.py` 에 OpenAPI 호출 어댑터 수동 등록.
 
 #### ② SPA 뒤늦은 감지 (LLM fallback → post-hoc recovery)
 
@@ -133,8 +137,8 @@ response = cffi_requests.get(url, impersonate="chrome131", headers=..., ...)
 
 | 사이트 | 상태 | 비고 |
 |--------|------|------|
-| 벼룩시장 (findall) | recovery 성공 → API 35개 캡처, Ranker/재시도 루프 작동 | 응답이 2단계 중첩 (`data.partTimeJobList[i].jobAdList[j]`) 이라 validator 의 item_path 가 바깥 배열만 잡아서 최종 등록은 실패 — 중첩 path 자동 탐지 추후 과제 |
-| 스카우트 (scout) | recovery 작동, 그러나 Playwright 가 XHR 캡처 0건 | 리스트 페이지가 스크롤/클릭 같은 상호작용 후에만 XHR 발생하는 타입 — 인터랙티브 Playwright 필요 |
+| 벼룩시장 (findall) | **등록 완료** — 18건 수집 | 2단계 중첩 구조 (`data.partTimeJobList[*].jobAdList`) 를 validator 가 자동 탐지해 item_path 를 `[*]` 구문으로 업그레이드. `_traverse_path` 양쪽(validator + api_crawler)에 와일드카드 지원 추가 |
+| 스카우트 (scout) | recovery 작동하나 Playwright 가 XHR 캡처 0건 | 리스트 페이지가 스크롤/클릭 같은 상호작용 후에만 XHR 발생하는 타입 — 인터랙티브 Playwright 필요 (별건 과제) |
 
 #### ③ 쿠키/세션 기반 심화 방어
 
