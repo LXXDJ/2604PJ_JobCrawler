@@ -155,8 +155,7 @@
     "pagination": {
       "type": "api_param",
       "param": "page",
-      "start": 1,
-      "max_pages": 3
+      "start": 1
     },
     "validated": true,
     "validation_report": {
