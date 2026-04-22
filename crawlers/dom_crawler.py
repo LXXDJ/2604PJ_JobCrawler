@@ -287,11 +287,28 @@ def crawl(
         if cap:
             total_pages = min(total_pages, cap)
 
+        # _get_total_pages 가 보이는 pagination 링크만 읽어서 과소 추정하는 경우가 있음
+        # (gnuboard 류 "1-10 다음 >" 스타일). 아래 루프가 빈 페이지 만날 때까지 진행하도록
+        # total_pages 가 1 이고 cap 없으면 상한을 크게 잡아 주고 break 조건에 의존.
+        if total_pages <= 1 and not cap:
+            total_pages = 1000
+            print(f"    [전체탐색] 페이지링크 감지 실패 — 빈 페이지까지 반복 (상한 {total_pages})")
+
         # early termination: 연속으로 "이미 있음" 이 이 임계치만큼 나오면
         # 뒤 페이지는 긁지 않고 종료. 신규 발견 시 카운터 리셋되므로
         # bump(오래된 공고가 위로 끌어올려짐) 상황에도 뚫고 지나감.
-        # 0 이면 비활성 (전체 순회).
+        # 0 이면 비활성 (전체 순회). 초기 수집에서는 0 으로 강제.
         stop_threshold = pagination.get("consecutive_existing_stop", 30)
+        try:
+            with db.connect() as _c:
+                existing_rows = _c.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE source=?", (site_id,)
+                ).fetchone()[0]
+        except Exception:
+            existing_rows = None
+        if existing_rows == 0 and stop_threshold:
+            print(f"    [초기수집] 기존 0건 — 조기종료 비활성화")
+            stop_threshold = 0
         consecutive_existing = 0
 
         print(f"\n    수집할 페이지: {total_pages}"
@@ -310,6 +327,11 @@ def crawl(
 
             posts = _parse_list_page(html, config)
             print(f"\n[{page}/{start_page + total_pages - 1}] {len(posts)}건 처리 중...")
+
+            # 빈 페이지 → 끝에 도달, 중단. _get_total_pages 가 과소 추정했을 때도 안전.
+            if not posts:
+                print("    (빈 페이지 — 중단)")
+                break
 
             for post in posts:
                 ext_id = _extract_external_id(post["link"], config)

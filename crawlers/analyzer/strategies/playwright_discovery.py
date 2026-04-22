@@ -394,12 +394,26 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
         Playwright 로 페이지 열고 JSON 응답들 수집.
         각 항목: {url, method, request_headers, body_snippet, response_shape, size}
         """
+        import os
+        from urllib.parse import urlparse
         from playwright.sync_api import sync_playwright
 
         captured: list[dict] = []
 
+        launch_kwargs: dict = {"headless": True}
+        proxy_url = os.environ.get("PLAYWRIGHT_PROXY") or os.environ.get("HTTPS_PROXY")
+        if proxy_url:
+            pu = urlparse(proxy_url)
+            proxy_cfg = {"server": f"{pu.scheme}://{pu.hostname}:{pu.port}"}
+            if pu.username:
+                proxy_cfg["username"] = pu.username
+            if pu.password:
+                proxy_cfg["password"] = pu.password
+            launch_kwargs["proxy"] = proxy_cfg
+            print(f"      [playwright] proxy 사용: {pu.hostname}:{pu.port}")
+
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(**launch_kwargs)
             context = browser.new_context(user_agent=USER_AGENT, ignore_https_errors=True)
             page = context.new_page()
 

@@ -281,8 +281,10 @@ def validate_api_config(config: dict) -> ValidationReport:
 
     if not api_endpoint:
         return ValidationReport(ok=False, reason="source.api_endpoint 비어있음")
-    if not item_path:
-        return ValidationReport(ok=False, reason="source.item_path 비어있음")
+    # item_path 가 비어있어도 아래에서 payload 자체를 walk 해서 자동 탐색.
+    # 자소설닷컴 처럼 playwright_discovery 가 후보는 찾았지만 item_path 를
+    # 결정 못 한 경우 대응. payload 가 list 면 _traverse_path 가 그대로 반환하고,
+    # dict 면 _find_best_title_array 로 복구 시도.
 
     # POST body — Playwright 가 캡처한 실제 요청 body. LG·토스 같이 검색조건이 body 에
     # 담겨 보내지는 API 대응. request_body 가 없으면 기존대로 list_params 를 body 로 씀.
@@ -337,16 +339,45 @@ def validate_api_config(config: dict) -> ValidationReport:
             reason=f"item_path {item_path!r} 도달 실패 (응답 구조 변경?)",
         )
     if not isinstance(items, list):
-        return ValidationReport(
-            ok=False,
-            reason=f"item_path 끝 값이 list 아님 (type={type(items).__name__})",
-        )
+        # item_path 가 비어있고 payload 최상위가 dict 인 케이스 — 자동 탐색으로 복구.
+        if not item_path and isinstance(payload, dict):
+            better_path, better_list = _find_best_title_array(payload)
+            if better_path and len(better_list) >= MIN_LIST_ROWS:
+                source["item_path"] = better_path
+                items = better_list
+                item_path = better_path
+                print(
+                    f"      [validator] item_path 자동 탐색: {better_path!r} "
+                    f"({len(items)}건, payload walk)"
+                )
+            else:
+                return ValidationReport(
+                    ok=False,
+                    reason="item_path 비어있고 title-rich 배열도 못 찾음",
+                )
+        else:
+            return ValidationReport(
+                ok=False,
+                reason=f"item_path 끝 값이 list 아님 (type={type(items).__name__})",
+            )
     if len(items) < MIN_LIST_ROWS:
-        return ValidationReport(
-            ok=False,
-            reason=f"배열 길이 {len(items)} < {MIN_LIST_ROWS}",
-            items_extracted=len(items),
-        )
+        # 짧은 list 도 _find_best_title_array 로 복구 시도 (Gatsby 등에서 노이즈 배열 회피)
+        if isinstance(payload, dict):
+            better_path, better_list = _find_best_title_array(payload)
+            if better_path and len(better_list) >= MIN_LIST_ROWS and better_path != item_path:
+                source["item_path"] = better_path
+                items = better_list
+                item_path = better_path
+                print(
+                    f"      [validator] 짧은 배열({MIN_LIST_ROWS} 미만) → "
+                    f"{better_path!r} ({len(items)}건) 로 재탐색 성공"
+                )
+        if len(items) < MIN_LIST_ROWS:
+            return ValidationReport(
+                ok=False,
+                reason=f"배열 길이 {len(items)} < {MIN_LIST_ROWS}",
+                items_extracted=len(items),
+            )
 
     # --- 자동 path 재탐색 (Gatsby/Strapi/GraphQL 대응) ---
     # Playwright 가 item_path 를 '첫 list' 기준으로 잡으면 당근/라인 같은 Gatsby

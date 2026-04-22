@@ -17,6 +17,7 @@ PlaywrightDiscoveryStrategy 가 발견한 내부 JSON API 를 직접 호출하�
     - JSONPath 표현식 (현재는 단순 dot-notation 만)
 """
 
+import math
 import time
 from typing import Any, Optional
 from urllib.parse import urljoin
@@ -24,6 +25,78 @@ from urllib.parse import urljoin
 import requests
 
 from database import JobDatabase
+
+
+# 총 건수/페이지수 자동 감지용 키 — 응답에서 이 이름을 가진 숫자 필드를 walk 로 찾는다.
+# max_pages 지정 없고 total_path 없을 때 fallback (알바몬 totalCnt, 사람인 totalCount 등).
+AUTO_TOTAL_ITEM_KEYS = (
+    "totalCount", "totalRecord", "totalRecords", "totalCnt", "total_cnt",
+    "total_count", "total", "totalElements", "recordCount", "totalNum",
+    "totalResults", "resultCount", "count",
+)
+AUTO_TOTAL_PAGE_KEYS = (
+    "totalPage", "totalPages", "totalPageCount", "total_pages", "pageTotal",
+    "maxPage", "lastPage",
+)
+# page_size 추정용 파라미터 이름 — list_params 에 명시된 값 우선, 없으면 첫 페이지 items 길이.
+PAGE_SIZE_PARAM_KEYS = ("size", "limit", "rows", "pageSize", "perPage", "count", "pp")
+
+# 안전장치 — total_path/auto 모두 실패했을 때 빈 페이지 감지로 수렴하지만, 무한루프 방지 상한.
+AUTO_PAGE_HARD_LIMIT = 1000
+
+
+def _find_number_by_keys(payload: Any, keys: tuple, max_depth: int = 3) -> Optional[int]:
+    """payload 를 walk 하며 keys 에 속한 숫자 필드를 반환. 못 찾으면 None."""
+    if max_depth < 0:
+        return None
+    if isinstance(payload, dict):
+        for k, v in payload.items():
+            if k in keys and isinstance(v, (int, float)) and v >= 0:
+                return int(v)
+        for v in payload.values():
+            r = _find_number_by_keys(v, keys, max_depth - 1)
+            if r is not None:
+                return r
+    elif isinstance(payload, list):
+        for v in payload[:3]:  # 앞 3개만 탐색
+            r = _find_number_by_keys(v, keys, max_depth - 1)
+            if r is not None:
+                return r
+    return None
+
+
+def _auto_detect_total_pages(first_response: Any, first_items_len: int,
+                              list_params: dict) -> Optional[int]:
+    """total_path 지정 없을 때 응답에서 페이지 수 자동 감지.
+
+    우선순위:
+      1) `totalPage` 같은 페이지 수 키 (그대로 사용)
+      2) `totalCount` 같은 전체 건수 키 ÷ page_size 올림
+      3) 못 찾으면 None (호출자가 다른 fallback 사용)
+    """
+    pages = _find_number_by_keys(first_response, AUTO_TOTAL_PAGE_KEYS)
+    if pages is not None and 0 < pages <= AUTO_PAGE_HARD_LIMIT:
+        return pages
+
+    total_items = _find_number_by_keys(first_response, AUTO_TOTAL_ITEM_KEYS)
+    if total_items is None or total_items <= 0:
+        return None
+
+    page_size = None
+    for k in PAGE_SIZE_PARAM_KEYS:
+        v = list_params.get(k)
+        if isinstance(v, (int, float)) and v > 0:
+            page_size = int(v)
+            break
+        if isinstance(v, str) and v.isdigit():
+            page_size = int(v)
+            break
+    if not page_size:
+        page_size = first_items_len or 20
+    if page_size <= 0:
+        return None
+    calculated = math.ceil(total_items / page_size)
+    return min(calculated, AUTO_PAGE_HARD_LIMIT)
 
 
 USER_AGENT = (
@@ -437,19 +510,49 @@ def crawl(
                 total_pages_from_api = int(t)
 
         cap = max_pages or pagination.get("max_pages")
+
+        # total_path 지정 없으면 응답 자동 감지 시도 (totalCount/totalPage 등).
+        if total_pages_from_api is None:
+            first_items_probe = _traverse_path(first_response, item_path)
+            first_len = len(first_items_probe) if isinstance(first_items_probe, list) else 0
+            auto_pages = _auto_detect_total_pages(
+                first_response, first_len, base_list_params,
+            )
+            if auto_pages:
+                total_pages_from_api = auto_pages
+                print(f"    [AUTO] total 필드 자동 감지 → 총 {auto_pages} 페이지")
+
         if total_pages_from_api is None and not cap:
-            # 총 페이지 모르고 cap 도 없으면 일단 1페이지만 (안전장치).
-            # 운영에서는 cap 을 명시하는 게 안전.
-            total_pages = 1
-            print("    [WARN] total_path 없고 max_pages 미지정 → 1페이지만 수집")
+            # total 정보 아예 없음 → 빈 페이지 만날 때까지 반복 (하드 상한 = AUTO_PAGE_HARD_LIMIT).
+            # 기존 1페이지 제한은 초기 수집 시 누락이 너무 커서 변경됨.
+            total_pages = AUTO_PAGE_HARD_LIMIT
+            print(f"    [WARN] total 정보 없음 — 빈 페이지까지 반복 (상한 {total_pages})")
         else:
             total_pages = total_pages_from_api or cap
             if cap and total_pages_from_api:
                 total_pages = min(total_pages_from_api, cap)
 
         # early termination: dom_crawler 와 동일 정책.
+        # 초기 수집(DB에 해당 source 가 0건)이면 조기종료 끔 — 초기엔 전 페이지 전부 신규라
+        # 조기종료가 발동할 일 없지만, 일부 사이트는 과거 페이지를 다시 노출해서 잘못 끊김.
         stop_threshold = pagination.get("consecutive_existing_stop", 30)
+        try:
+            with db.connect() as _c:
+                existing_rows = _c.execute(
+                    "SELECT COUNT(*) FROM jobs WHERE source=?", (site_id,)
+                ).fetchone()[0]
+        except Exception:
+            existing_rows = None
+        if existing_rows == 0 and stop_threshold:
+            print(f"    [초기수집] 기존 0건 — 조기종료 비활성화")
+            stop_threshold = 0
         consecutive_existing = 0
+
+        # 동일 페이지 반복 감지: endpoint 가 page 파라미터를 무시하고 매번 같은 데이터
+        # 반환하는 경우 (알바몬 special-recruits 같은 홈 메인 위젯 endpoint). 페이지의
+        # 모든 item 이 기존이고 신규 0 인 상태가 ALL_EXISTING_BREAK 페이지 연속되면 중단.
+        pages_all_existing = 0
+        ALL_EXISTING_BREAK = 3
 
         print(f"\n    수집할 페이지: {start_page} ~ {start_page + total_pages - 1}"
               + (f"  (연속 기존 {stop_threshold}건 시 조기종료)"
@@ -482,6 +585,9 @@ def crawl(
             if not items:
                 print("    (빈 페이지 — 중단)")
                 break
+
+            page_new_before = new_count
+            page_updated_before = updated_count
 
             for item in items:
                 if not isinstance(item, dict):
@@ -538,6 +644,18 @@ def crawl(
                 print(f"    [조기종료] 연속 기존 {consecutive_existing} >= {stop_threshold}"
                       f" — page {page} 에서 중단")
                 break
+
+            # 동일 페이지 반복 감지 — 이 페이지에서 신규 0, items 있고 전부 기존이면 +1.
+            page_new = new_count - page_new_before
+            page_updated = updated_count - page_updated_before
+            if page_new == 0 and page_updated == len(items) and len(items) > 0:
+                pages_all_existing += 1
+                if pages_all_existing >= ALL_EXISTING_BREAK:
+                    print(f"    [중단] 최근 {ALL_EXISTING_BREAK} 페이지 전부 기존 데이터 — "
+                          f"endpoint 가 page 파라미터 무시 (고정 데이터) 추정")
+                    break
+            else:
+                pages_all_existing = 0
 
         db.finish_crawl_run(run_id, new_count, updated_count)
 
