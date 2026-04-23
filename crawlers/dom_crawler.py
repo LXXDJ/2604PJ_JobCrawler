@@ -265,6 +265,9 @@ def crawl(
         "timeout": (http_config or {}).get("timeout", 30),
         "max_retries": (http_config or {}).get("max_retries", 3),
         "retry_backoff": (http_config or {}).get("retry_backoff", 2.0),
+        # 403 받으면 Playwright 로 한 번 쿠키 워밍업 후 재시도.
+        # hibrain/saramin 처럼 첫 요청은 통과시키지만 연속/패턴으로 막는 사이트 대응.
+        "cf_bypass_on_403": True,
     }
 
     print("=" * 60)

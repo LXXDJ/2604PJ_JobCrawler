@@ -14,6 +14,14 @@ sites.json / REGISTERED_CRAWLS 엔트리를 받아서 적절한 크롤러를 호
 한 sub 가 실패해도 다음 sub 로 진행 — 한 메뉴가 깨져도 다른 메뉴는 계속 수집되도록.
 """
 
+import os
+import time
+
+# source 간 sleep — 같은 사이트의 여러 메뉴를 연속 폭주로 때리면 WAF 가
+# 행동 패턴(JA3 통과해도 빈도) 으로 차단함. 하이브레인이 첫 source 통과 후
+# 12개 연속 403 받은 사례. 환경변수로 조정 가능.
+SOURCE_GAP_SECONDS = float(os.environ.get("SOURCE_GAP_SECONDS", "5.0"))
+
 
 def _normalize_sources(entry: dict) -> list[dict]:
     """entry 에서 sources 배열 추출 (v1 legacy 는 single source 로 감쌈)."""
@@ -84,6 +92,9 @@ def dispatch(entry: dict, db_path: str, http_config: dict):
         menu_label = sub.get("menu_name") or f"source#{idx}"
         if len(sources) > 1:
             print(f"\n  ──── [{site_id}] 메뉴 '{menu_label}' ({idx}/{len(sources)}) ────")
+            if idx > 1 and SOURCE_GAP_SECONDS > 0:
+                # WAF 행동 패턴 차단 회피용 인터벌
+                time.sleep(SOURCE_GAP_SECONDS)
 
         try:
             result = _run_single_source(site_id, sub, db_path, http_config) or {}
