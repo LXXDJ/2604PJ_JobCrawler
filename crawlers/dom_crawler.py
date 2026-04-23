@@ -27,6 +27,11 @@ from database import JobDatabase
 from http_client import fetch
 
 
+# 사이트당 최대 수집 시간(초). api_crawler.SITE_MAX_SECONDS 와 동일 정책.
+# 네트워크 hang / 과도한 페이지 수집 방지 — 초과시 중단 후 다음 사이트로 넘어감.
+SITE_MAX_SECONDS = 1800
+
+
 # ============================================================
 # 리스트/상세 파싱
 # ============================================================
@@ -316,8 +321,14 @@ def crawl(
                  if stop_threshold else ""))
 
         # 2) 페이지 순회
+        site_start_time = time.time()
         start_page = pagination.get("start", 1)
         for page in range(start_page, start_page + total_pages):
+            # 사이트 timeout 체크 — hang / 무한 페이지 방지
+            if time.time() - site_start_time > SITE_MAX_SECONDS:
+                print(f"    [TIMEOUT] {SITE_MAX_SECONDS}초 초과 ({page - start_page}페이지 처리) — 중단")
+                break
+
             if page == start_page:
                 html = first_html
             else:

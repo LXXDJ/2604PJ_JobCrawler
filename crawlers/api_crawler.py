@@ -44,6 +44,12 @@ PAGE_SIZE_PARAM_KEYS = ("size", "limit", "rows", "pageSize", "perPage", "count",
 # 안전장치 — total_path/auto 모두 실패했을 때 빈 페이지 감지로 수렴하지만, 무한루프 방지 상한.
 AUTO_PAGE_HARD_LIMIT = 1000
 
+# 사이트당 최대 수집 시간(초). 네트워크 hang 이나 무한 페이지 루프 시 배치 전체가 멈추는
+# 것 방지 — 한 사이트가 이 시간 초과하면 중단하고 다음 사이트로 넘어감.
+# 2026-04-23 incruit hang 사고 대응: 전체 페이지 수집 옵션 이후 한 사이트가 끝 안 나면
+# Windows Task Scheduler 가 "완료" 못 하고 Slack 요약도 전송 안 됨.
+SITE_MAX_SECONDS = 1800
+
 
 def _find_number_by_keys(payload: Any, keys: tuple, max_depth: int = 3) -> Optional[int]:
     """payload 를 walk 하며 keys 에 속한 숫자 필드를 반환. 못 찾으면 None."""
@@ -554,12 +560,20 @@ def crawl(
         pages_all_existing = 0
         ALL_EXISTING_BREAK = 3
 
+        # 사이트 전체 timeout 시작 시각 기록.
+        site_start_time = time.time()
+
         print(f"\n    수집할 페이지: {start_page} ~ {start_page + total_pages - 1}"
               + (f"  (연속 기존 {stop_threshold}건 시 조기종료)"
                  if stop_threshold else ""))
 
         # 2) 페이지 순회
         for page in range(start_page, start_page + total_pages):
+            # 사이트 timeout 체크 — hang/무한 페이지 방지
+            if time.time() - site_start_time > SITE_MAX_SECONDS:
+                print(f"    [TIMEOUT] {SITE_MAX_SECONDS}초 초과 ({page - start_page}페이지 처리) — 중단")
+                break
+
             if page == start_page:
                 response_json = first_response
             else:
