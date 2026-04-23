@@ -286,6 +286,48 @@ def _capture_page(url: str):
 
         browser.close()
 
+    # === curl_cffi 보조 — Playwright 가 차단/빈 페이지 받았을 때 보강 ===
+    # 하이브레인 같이 Playwright 헤드리스에 에러 페이지 주지만 curl_cffi(Chrome impersonate)
+    # 로는 정상 HTML 받는 사이트 대응. page_text 가 너무 짧거나 "Access Denied" 같은
+    # 차단 표시 있으면 curl 로 HTML 받아 BeautifulSoup 파싱.
+    block_markers = (
+        "access denied", "cloudflare", "blocked", "요청을 처리할 수 없", "페이지를 찾을 수 없",
+        "error 403", "error 429", "접근이 차단", "suspicious activity",
+    )
+    needs_fallback = (
+        len(page_text_full) < 500
+        or any(m in page_text_full.lower() for m in block_markers)
+    )
+    if needs_fallback:
+        try:
+            try:
+                from http_client import fetch
+            except ImportError:
+                from crawlers.http_client import fetch
+            html = fetch(url, timeout=30, max_retries=1)
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "lxml")
+            for s in soup(["script", "style", "noscript"]):
+                s.decompose()
+            main_el = soup.find(["main"]) or soup.find(attrs={"role": "main"})
+            el = main_el or soup.body or soup
+            curl_text = el.get_text(" ", strip=True) if el else ""
+            if len(curl_text) > len(page_text_full):
+                print(f"      [classify] curl_cffi fallback — page_text {len(page_text_full)} → {len(curl_text)}자")
+                page_text_full = curl_text
+            # sample_texts 보강
+            curl_samples = []
+            for tag in soup.select('h2,h3,h4,li,a,article,[class*="title"],[class*="subject"]'):
+                t = (tag.get_text(" ", strip=True) or "").strip()
+                if 6 <= len(t) <= 120 and t not in curl_samples and t not in sample_texts:
+                    curl_samples.append(t)
+                if len(sample_texts) + len(curl_samples) >= MAX_SAMPLE_TEXTS:
+                    break
+            if curl_samples:
+                sample_texts.extend(curl_samples)
+        except Exception as e:
+            print(f"      [classify] curl_cffi fallback 실패: {type(e).__name__}: {str(e)[:100]}")
+
     # 텍스트 길이 상한 적용 — 토큰 비용 관리
     if len(page_text_full) > MAX_PAGE_TEXT_CHARS:
         page_text_full = page_text_full[:MAX_PAGE_TEXT_CHARS] + " …[truncated]"
