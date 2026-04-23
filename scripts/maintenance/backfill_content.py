@@ -18,7 +18,7 @@ from urllib.parse import urlparse, urljoin
 
 sys.stdout = TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "crawlers"))
 
 from http_client import fetch

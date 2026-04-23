@@ -30,7 +30,7 @@
 
 현재 **17개 사이트 등록** (2026-04-21 기준). 9개 → 17개 확장 과정에서 사이트별 방어 강도가 크게 달라 **난이도별로 분류**하고, 각 단계에서 도입한 우회 기법을 정리함.
 
-> 목록은 `python scripts/list_sites.py` 로 확인. 비활성화된 사이트는 `enabled: false` 로 건너뜀.
+> 목록은 `python scripts/inspect/list_sites.py` 로 확인. 비활성화된 사이트는 `enabled: false` 로 건너뜀.
 
 ### 난이도 분류 요약
 
@@ -81,7 +81,7 @@
 | jobplanet | https://www.jobplanet.co.kr/job | `/api/v3/job/postings` | `jp-ssr-auth` 토큰 (고정값) + `jp-os-type: mobile_web` |
 | findall | https://www.findall.co.kr/job | `findjob.co.kr/.../mainPartTimeJobList` | **2단계 중첩** 응답 — validator 가 `data.partTimeJobList[*].jobAdList` 로 item_path 자동 업그레이드 |
 
-> **링커리어·알바몬 제외 이유** (역사적): LLM Ranker 가 GraphQL 필터옵션 / 브랜드 코드 API 를 1위로 오인식해서 `scripts/cleanup_bad_entries.py` 로 제거했었음. 이후 아래 ① + ② 로 대응 완료.
+> **링커리어·알바몬 제외 이유** (역사적): LLM Ranker 가 GraphQL 필터옵션 / 브랜드 코드 API 를 1위로 오인식해서 `scripts/maintenance/cleanup_bad_entries.py` 로 제거했었음. 이후 아래 ① + ② 로 대응 완료.
 >
 > **① validator 강화** ([validator.py:27-58](crawlers/analyzer/validator.py#L27-L58)): `validate_api_config` 에 3가지 2차 시그널 체크 추가 — "`name` 필드 있는 배열" 만으로는 통과 못 함.
 > - 제목 평균 길이 ≥ 8자 (필터코드는 2~6자)
@@ -293,11 +293,13 @@ JA3 지문까지 흉내내도 막히는 사이트. curl_cffi 적용 이후 재�
 │   ├── healthcheck.py            # crawl_runs 이력 기반 이상 감지
 │   └── slack_notifier.py         # 헬스체크 알림 + 배치 요약 알림
 │
-├── scripts/
-│   ├── run_crawl.bat             # Task Scheduler 엔트리 (cwd+로그 래퍼)
-│   ├── list_sites.py             # 등록된 사이트 목록 출력
-│   ├── check_today_runs.py       # 오늘 crawl_runs 결과 확인
-│   └── ... (진단/탐색 스크립트 다수)
+├── scripts/                      # 분류별 서브폴더
+│   ├── batch/                    #  └ 배치 등록 (batch_add, batch_analyze)
+│   ├── crawl/                    #  └ 크롤 실행 (crawl_full, crawl_one, run_crawl.bat)
+│   ├── maintenance/              #  └ 유지보수 (cleanup_*, backfill, set_enabled)
+│   ├── inspect/                  #  └ 조회 (list_sites, db_counts, sample_jobs)
+│   ├── db/                       #  └ DB/엔트리 조작 (remove_site, wipe_source)
+│   └── dev/                      #  └ 개발/테스트 (test_*, probe_proxy)
 │
 ├── data/
 │   ├── jobs.db                   # SQLite (jobs + crawl_runs)
@@ -384,12 +386,12 @@ webhook 전송 실패해도 crawl은 정상 종료 (에러는 로그에만 기�
 `crawl`을 매일 정해진 시간에 자동으로 돌리려면 **Windows 작업 스케줄러**에 등록.
 (APScheduler 같은 파이썬 상주 프로세스는 컴퓨터가 꺼지면 죽어서 부적합.)
 
-래퍼 스크립트로 [scripts/run_crawl.bat](scripts/run_crawl.bat) 를 제공한다 — cwd 를 맞추고, Python 절대경로로 `main.py crawl` 을 실행한 뒤, 결과를 `logs/scheduled-YYYYMMDD.log` 에 append 한다. 스케줄러에서는 이 bat 하나만 등록하면 됨.
+래퍼 스크립트로 [scripts/crawl/run_crawl.bat](scripts/crawl/run_crawl.bat) 를 제공한다 — cwd 를 맞추고, Python 절대경로로 `main.py crawl` 을 실행한 뒤, 결과를 `logs/scheduled-YYYYMMDD.log` 에 append 한다. 스케줄러에서는 이 bat 하나만 등록하면 됨.
 
 #### PowerShell 로 한 번에 등록 (권장)
 
 ```powershell
-$action   = New-ScheduledTaskAction -Execute "C:\Users\<사용자>\OneDrive\Documents\code\2604PJ_JobCrawler\scripts\run_crawl.bat"
+$action   = New-ScheduledTaskAction -Execute "C:\Users\<사용자>\OneDrive\Documents\code\2604PJ_JobCrawler\scripts\crawl\run_crawl.bat"
 $trigger  = New-ScheduledTaskTrigger -Daily -At 00:00
 $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
@@ -408,7 +410,7 @@ Register-ScheduledTask -TaskName "JobCrawler" -Action $action -Trigger $trigger 
 #### GUI 등록
 
 1. `Win + R` → `taskschd.msc` → **작업 만들기**
-2. **동작** 탭 → **프로그램 시작** → `scripts/run_crawl.bat` 의 절대경로
+2. **동작** 탭 → **프로그램 시작** → `scripts/crawl/run_crawl.bat` 의 절대경로
 3. **트리거** 탭 → 매일 / 00:00
 4. **설정** 탭 → "예약대로 시작하지 못한 경우 가능한 한 빨리 작업 시작" 체크, "작업을 중지하기까지 시간" = 1시간
 5. **조건** 탭 → (노트북이면) "컴퓨터 AC 전원 사용 시에만 작업 시작" 해제
@@ -418,7 +420,7 @@ Register-ScheduledTask -TaskName "JobCrawler" -Action $action -Trigger $trigger 
 
 - Slack 알림 — 배치 요약이 바로 날아옴 (설정했다면)
 - `logs/scheduled-YYYYMMDD.log` — 전체 stdout/stderr
-- `python scripts/check_today_runs.py` — 오늘 crawl_runs rows 조회
+- `python scripts/inspect/db_counts.py` — source 별 수집 건수 집계
 
 ---
 
@@ -427,10 +429,8 @@ Register-ScheduledTask -TaskName "JobCrawler" -Action $action -Trigger $trigger 
 | 작업 | 내용 |
 |------|------|
 | 1,500 사이트 확장 | analyzer 신뢰도 재튜닝 + `python main.py add <URL>` 배치 등록 |
-| 사이트별 재시도 격리 | 단일 사이트 타임아웃이 배치 전체 ExecutionTimeLimit 을 먹지 않게 per-site timeout |
+| 사이트 전원 재시도 격리 | 단일 사이트 타임아웃이 배치 전체 ExecutionTimeLimit 을 먹지 않게 per-site timeout |
 | WordPress / 기타 플랫폼 | 현재 heuristic 은 구조만 준비 — 실제 샘플로 selectors 확정 필요 |
-| 인터랙티브 SPA | 스카우트(scout.co.kr) 처럼 스크롤/클릭 이후에만 XHR 발사되는 사이트 — playwright_discovery 에 auto-scroll / 기본 필터 클릭 같은 최소 상호작용 단계 추가 |
-| OpenAPI 어댑터 | 고용24·알리오처럼 공공 OpenAPI 제공 사이트를 `hardcoded_crawls.py` 에 OpenAPI 호출 어댑터로 수동 등록하는 패턴 정립 |
 
 ---
 

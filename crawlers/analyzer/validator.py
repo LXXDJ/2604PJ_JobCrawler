@@ -462,21 +462,10 @@ def validate_api_config(config: dict) -> ValidationReport:
         )
 
     # --- 2차 시그널 검증 (필터옵션/코드테이블 가드) ---
-    # (1) 제목 평균 길이 — 필터코드는 2~6자, 공고는 보통 15자+
     avg_title_len = sum(len(t) for t in titles) / len(titles) if titles else 0
-    if avg_title_len < MIN_AVG_TITLE_LEN_API:
-        return ValidationReport(
-            ok=False,
-            reason=(
-                f"제목 평균 길이 {avg_title_len:.1f}자 < {MIN_AVG_TITLE_LEN_API}자 "
-                f"— 필터옵션/코드테이블 API 가능성"
-            ),
-            items_extracted=len(items),
-            fields_matched=fields_matched,
-            sample_titles=titles[:3],
-        )
 
-    # (2) 코드테이블 패턴 — 아이템이 {id/code/name/value/label} 같은 짧은 필드셋만 가지면 거부
+    # (1) 코드테이블 패턴 — 아이템이 {id/code/name/value/label} 같은 짧은 필드셋만 가지면 거부.
+    #     이건 제목 길이와 무관하게 명확한 필터옵션 시그널.
     if _is_code_table_pattern(items):
         return ValidationReport(
             ok=False,
@@ -489,13 +478,31 @@ def validate_api_config(config: dict) -> ValidationReport:
             sample_titles=titles[:3],
         )
 
-    # (3) 2차 시그널 비율 — 회사/날짜/위치/URL/급여 중 하나라도 가진 아이템 비율
+    # (2) 2차 시그널 비율 — 회사/날짜/위치/URL/급여 중 하나라도 가진 아이템 비율
     second_signal_count = sum(
         1 for item in items
         if isinstance(item, dict) and _has_second_signal(item)
     )
     second_signal_ratio = second_signal_count / len(items)
     fields_matched["second_signal"] = second_signal_count
+
+    # (3) 제목 길이 + 2차 시그널 조합 — 제목 짧아도 2차 시그널 풍부하면 통과.
+    # 한국어 알바 공고 ("주방보조", "홀서빙") 같이 평균 6~7자 케이스가 필터옵션으로
+    # 오판되는 경우를 회사/날짜 필드로 구제.
+    if avg_title_len < MIN_AVG_TITLE_LEN_API and second_signal_ratio < MIN_SECOND_SIGNAL_RATIO:
+        return ValidationReport(
+            ok=False,
+            reason=(
+                f"제목 평균 {avg_title_len:.1f}자 < {MIN_AVG_TITLE_LEN_API}자 AND "
+                f"2차 시그널 비율 {second_signal_ratio:.0%} < {MIN_SECOND_SIGNAL_RATIO:.0%} "
+                f"— 필터옵션/메타데이터 API 가능성"
+            ),
+            items_extracted=len(items),
+            fields_matched=fields_matched,
+            sample_titles=titles[:3],
+        )
+
+    # (4) 제목은 충분하나 2차 시그널 부족 — 메타데이터일 가능성 (기존 정책 유지)
     if second_signal_ratio < MIN_SECOND_SIGNAL_RATIO:
         return ValidationReport(
             ok=False,

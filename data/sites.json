@@ -796,50 +796,6 @@
     }
   },
   {
-    "site_id": "albamon",
-    "url": "https://www.albamon.com/",
-    "site_type": "api_discovered",
-    "added_at": "2026-04-21T06:31:27.390519+00:00",
-    "extraction_method": "api",
-    "requires_render": false,
-    "source": {
-      "api_endpoint": "https://bff-general.albamon.com/home/pc-main/special-recruits",
-      "method": "GET",
-      "base_url": "https://www.albamon.com",
-      "request_headers": {
-        "sec-ch-ua-platform": "\"Windows\"",
-        "albamon-domain-type": "pc",
-        "referer": "https://www.albamon.com/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "accept": "application/json",
-        "sec-ch-ua": "\"Not:A-Brand\";v=\"99\", \"HeadlessChrome\";v=\"145\", \"Chromium\";v=\"145\"",
-        "sec-ch-ua-mobile": "?0"
-      },
-      "list_params": {},
-      "item_path": "specialRecruits"
-    },
-    "pagination": {
-      "type": "api_param",
-      "param": "page",
-      "start": 1
-    },
-    "validated": true,
-    "validation_report": {
-      "ok": true,
-      "reason": "",
-      "items_extracted": 19,
-      "fields_matched": {
-        "title": 19,
-        "second_signal": 19
-      },
-      "sample_titles": [
-        "[:D 당일지급 bar] #초보가능 #바로근무 #당일지급",
-        "[기아][시간선택제] 드라이빙센터 매니저 (남부)  근무지 : 위례",
-        "[면접비 지원] #솔직히 이 공고 좀 이상합니다"
-      ]
-    }
-  },
-  {
     "site_id": "seoulkcr",
     "url": "https://work.seoulkcr.com/wanted/",
     "site_type": "static_html",

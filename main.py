@@ -525,6 +525,174 @@ def cmd_add(url: str):
         print("  → sites.json에 저장하지 않음. selectors 재확인 필요.")
         return
 
+    # === 메뉴 탐색 + LLM 판별 — 홈은 크롤 대상에서 제외 ===
+    # 입력 URL(홈) 은 "진입점" 일 뿐이지 공고 리스트 페이지 자체가 아닌 경우가 대부분.
+    # 알바몬 홈의 `special-recruits` API 처럼 홈 위젯이 공고로 오인되면 20건 고정 수집됨.
+    # → 홈 자체는 sources 에 넣지 않고, 네비에서 찾은 메뉴 중 LLM 이 "공고 리스트" 로
+    #    판정한 것만 sources 에 등록. (primary 검증은 "등록 가능성 게이트" 로만 쓰임)
+    from menu_discovery import discover_job_menus
+
+    sources_list: list[dict] = []       # 홈 자동 포함 안 함 — multi-menu 결과로만 채워짐
+    seen_endpoints: set = set()
+
+    print("\n  --- 메뉴 탐색 (multi-menu, 홈 제외) ---")
+    try:
+        menu_candidates = discover_job_menus(url, timeout_ms=20000)
+    except Exception as e:
+        menu_candidates = []
+        print(f"    [WARN] 메뉴 탐색 실패: {type(e).__name__}: {e}")
+
+    # 상한 제거 — 사용자 요구: "모든 메뉴 다 들어가서 구인 공고 있는지 확인".
+    # 홈 URL 은 classify 대상에서 제외 (LLM 이 홈을 "공고 아님" 으로 일관되게 판단하므로
+    # 불필요한 호출 방지).
+    menu_candidates = [
+        c for c in menu_candidates
+        if c["url"].rstrip("/") != url.rstrip("/")
+    ]
+    print(f"    시도 후보: {len(menu_candidates)}개 (전부 LLM 판별)")
+
+    # === 2-pass: 모든 메뉴 LLM 판별 → coverage 기반 선택 → sub_config 구성/검증 ===
+    # LLM 에게 각 메뉴 방문시키고 "공고 리스트인지 + 전체인지 부분집합인지" 답변 수집.
+    # full 발견되면 그것만 sources 에 등록 (filtered/personal 은 중복 데이터라 제외).
+    # full 하나도 없으면 filtered 전부 등록 (필터 조합 커버리지).
+    from menu_classifier import classify_menu
+
+    verdicts: list[tuple[dict, object]] = []
+    for cand in menu_candidates:
+        menu_name = cand["menu_name"]
+        menu_url = cand["url"]
+        print(f"\n    ▶ [{menu_name}] {menu_url[:90]}")
+        try:
+            verdict = classify_menu(
+                url=menu_url,
+                menu_name=menu_name,
+                api_key=LLM_API_KEY,
+                model=LLM_MODEL,
+            )
+        except Exception as e:
+            print(f"      classify 예외 — {type(e).__name__}: {e}")
+            continue
+        flag = "OK" if verdict.is_job_list else "skip"
+        print(f"      LLM {flag} [{verdict.coverage}] — {verdict.reason[:110]}")
+        if verdict.is_job_list:
+            verdicts.append((cand, verdict))
+
+    # coverage 기반 분류
+    full_set = [(c, v) for c, v in verdicts if v.coverage == "full"]
+    filtered_set = [(c, v) for c, v in verdicts if v.coverage == "filtered"]
+    # personal / unknown 은 등록 대상에서 제외 (개인화/판단 불가)
+
+    if full_set:
+        chosen = full_set
+        print(f"\n    [선택] full coverage {len(full_set)}개 등록 "
+              f"(filtered {len(filtered_set)}개는 중복이라 제외)")
+    elif filtered_set:
+        chosen = filtered_set
+        print(f"\n    [선택] full 없음 → filtered {len(filtered_set)}개 전부 등록 (필터 조합 커버)")
+    else:
+        chosen = []
+        print(f"\n    [선택] 등록할 추가 메뉴 없음")
+
+    # 선택된 메뉴들 각각 config 확정 → validator → sources 등록.
+    # 1순위: classify_menu 가 이미 공고 API index 지목 — captured_api 로 직접 sub_config 구성
+    #        (Playwright 재실행 생략, LLM 의 page-aware 판단 최대 활용)
+    # 2순위: analyzer.analyze 재실행 (1순위 실패 시 fallback)
+    from menu_classifier import build_sub_config_from_captured
+
+    for cand, verdict in chosen:
+        menu_name = cand["menu_name"]
+        menu_url = cand["url"]
+        sub_config = None
+
+        # --- 1순위: LLM 이 지목한 best_api 로 직접 구성 ---
+        if verdict.best_api_index is not None and verdict.captured_apis:
+            try:
+                chosen_api = verdict.captured_apis[verdict.best_api_index]
+                sub_config = build_sub_config_from_captured(chosen_api)
+                print(f"      [{menu_name}] LLM 지목 API 사용 → {chosen_api.get('url','')[:90]}")
+            except Exception as e:
+                print(f"      [{menu_name}] LLM API config 변환 실패: {type(e).__name__}: {e} — analyzer 폴백")
+                sub_config = None
+
+        # --- 2순위: analyzer fallback ---
+        if sub_config is None:
+            try:
+                sub_result = analyzer.analyze(menu_url)
+            except Exception as e:
+                print(f"      [{menu_name}] analyze 예외 — {type(e).__name__}: {e}")
+                continue
+
+            sub_ok, sub_reason = sites_registry.can_register(sub_result)
+            if not sub_ok:
+                print(f"      [{menu_name}] skip — {sub_reason}")
+                continue
+
+            try:
+                sub_config = sites_registry.analysis_to_new_schema_config(sub_result, menu_url)
+            except Exception as e:
+                print(f"      [{menu_name}] schema 변환 실패: {type(e).__name__}: {e}")
+                continue
+
+        sub_endpoint = (
+            (sub_config.get("source") or {}).get("api_endpoint")
+            or (sub_config.get("source") or {}).get("list_url")
+            or menu_url
+        )
+        if sub_endpoint in seen_endpoints:
+            print(f"      [{menu_name}] skip — 이미 등록된 endpoint")
+            continue
+
+        sub_method = sub_config["extraction_method"]
+        try:
+            if sub_method == "api":
+                sub_report = validate_api_config(sub_config)
+            elif sub_method in ("dom", "embedded_json"):
+                try:
+                    sub_html = fetch(menu_url, timeout=HTTP_TIMEOUT, max_retries=1)
+                except Exception as e:
+                    print(f"      [{menu_name}] fetch 실패: {type(e).__name__}: {e}")
+                    continue
+                if sub_method == "dom":
+                    sub_report = validate_dom_config(sub_html, sub_config)
+                else:
+                    sub_report = validate_embedded_json_config(
+                        sub_html, sub_config, url=menu_url,
+                    )
+            else:
+                print(f"      [{menu_name}] skip — 지원 안되는 method={sub_method!r}")
+                continue
+        except Exception as e:
+            print(f"      [{menu_name}] validator 예외: {type(e).__name__}: {e}")
+            continue
+
+        if not sub_report.ok:
+            print(f"      [{menu_name}] reject — {sub_report.reason}")
+            continue
+
+        sources_list.append({
+            "menu_name": menu_name,
+            "url": menu_url,
+            "extraction_method": sub_method,
+            "source": sub_config["source"],
+            "pagination": sub_config.get("pagination", {}),
+        })
+        seen_endpoints.add(sub_endpoint)
+        titles_preview = (sub_report.sample_titles or [])[:2]
+        print(f"      [OK] sources[{len(sources_list)}] ← {titles_preview}")
+
+    print(f"\n  총 수집 sources: {len(sources_list)}개")
+
+    # sources 가 비었으면 등록 거부 — 홈 URL 은 공고 리스트가 아닐 가능성 크므로 크롤
+    # 대상에 넣으면 안 됨. LLM 이 찾은 "공고 리스트 메뉴" 가 하나도 없다는 뜻이므로
+    # 사용자에게 다른 URL 지정을 요청해야 함.
+    if not sources_list:
+        print(f"\n[거부] 공고 리스트 메뉴를 찾지 못함.")
+        print(f"  → 홈 URL({url}) 자체는 전체 공고 페이지가 아닌 것으로 보이고,")
+        print(f"    네비에서 찾은 메뉴 중 LLM 이 공고 리스트로 판단한 것이 없음.")
+        print(f"  → sites.json 에 저장하지 않음. 구체적 공고 URL 을 직접 지정하거나")
+        print(f"    네비 탐색 로직(menu_discovery) 확장 필요.")
+        return
+
     # --- 저장 (validated=true 로 마킹) ---
     # 주의: build_entry 를 쓰지 않고 new_config 를 직접 사용.
     # 이유: validator 가 2단계 중첩 자동 탐지로 source["item_path"] 를 [*] 형태로 업그레이드한
@@ -534,12 +702,20 @@ def cmd_add(url: str):
     report_dict = report.to_dict()
     if retry_history:
         report_dict["retry_history"] = retry_history
+
+    # sources[0] 정보를 루트 레벨에도 복사 — dispatcher/크롤러 v1 역호환용.
+    # 홈 source 가 아니라 LLM 이 고른 첫 "공고 리스트 메뉴" 의 config 가 primary 가 된다.
+    primary = sources_list[0]
     entry = {
         "site_id": site_id,
         "url": url,
         "site_type": result.site_type.value,
         "added_at": datetime.now(timezone.utc).isoformat(),
-        **new_config,
+        "extraction_method": primary["extraction_method"],
+        "source": primary["source"],
+        "pagination": primary.get("pagination", {}),
+        # 신규 v2 스키마 — dispatcher 가 이 배열 순회해서 모든 메뉴 수집.
+        "sources": sources_list,
         "validated": True,
         "validation_report": report_dict,
     }
@@ -547,7 +723,8 @@ def cmd_add(url: str):
     sites_registry.save_all(SITES_JSON_PATH, entries)
 
     print(f"\n[OK] 등록 완료: {SITES_JSON_PATH}")
-    print(f"      이제 `python main.py crawl` 실행 시 함께 수집됨.")
+    print(f"      sources={len(sources_list)}개 / "
+          f"이제 `python main.py crawl` 실행 시 함께 수집됨.")
 
 
 def _collect_all_entries(enabled_only: bool = False):

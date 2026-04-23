@@ -16,6 +16,7 @@ add 시 단일 URL 만 보고 1개 endpoint 만 저장하던 방식의 한계 �
 """
 
 import os
+import re
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
@@ -41,8 +42,10 @@ JOB_MENU_EXCLUDE = (
     "news", "blog", "community", "커뮤니티", "자유게시판",
 )
 
-# 수집 링크 상한 — 메인이 100+ 링크면 무의미하게 커짐. 휴리스틱 스코어 top-N.
-MAX_MENU_CANDIDATES = 20
+# 수집 링크 상한 — 키워드 필터 + 패턴 중복 제거 후에도 남는 후보 수.
+# 사용자 요구: "모든 메뉴 다 들어가서 구인 공고 있는지 확인". 시간 비용 크지만 초기 add
+# 한 번만 하면 되므로 넉넉히. 패턴 중복제거가 잘 되면 보통 20~50개 수준.
+MAX_MENU_CANDIDATES = 200
 
 
 def _score_link(text: str, href: str) -> int:
@@ -67,7 +70,14 @@ def _score_link(text: str, href: str) -> int:
 
 
 def _extract_links_with_playwright(url: str, timeout_ms: int = 15000) -> list[dict]:
-    """Playwright 로 URL 로드 → 모든 <a> 수집 (text, href 포함)."""
+    """Playwright 로 URL 로드 → 네비게이션 영역의 링크만 수집.
+
+    본문/광고/푸터 링크는 제외하고 "메뉴" 역할의 anchor 만 대상.
+    식별 기준 (우선순위):
+      1. <nav>, <header>, <aside>, [role="navigation"]
+      2. 흔한 메뉴 클래스: gnb/lnb/nav/navbar/menu/sidebar/gnb-menu/main-menu/category 등
+      3. fallback: body 의 상단 15% viewport 안 링크 (메가메뉴가 일반 div 안에 있을 때)
+    """
     from playwright.sync_api import sync_playwright
 
     launch_kwargs = {"headless": True}
@@ -92,11 +102,85 @@ def _extract_links_with_playwright(url: str, timeout_ms: int = 15000) -> list[di
                 page.wait_for_load_state("networkidle", timeout=5000)
             except Exception:
                 pass  # networkidle 타임아웃은 무시 (SPA 가 계속 polling 할 수 있음)
+
+            # === 메가메뉴 펼치기: top-level nav 항목에 hover ===
+            # 알바몬/사람인 등은 hover 시에만 메가메뉴 DOM 을 동적 렌더. hover 안 하면
+            # 서브메뉴(지역별/업직종별/...) 는 DOM 에 존재하지 않아 querySelectorAll 이 못 잡음.
+            TOP_MENU_SELS = [
+                'nav > ul > li', 'nav > ol > li',
+                'header nav > ul > li', 'header nav > ol > li',
+                'header > nav > ul > li',
+                '.gnb > ul > li', '.gnb-menu > li', '.gnb li.gnb-item',
+                '.nav > li', '.navbar > li', '.main-menu > li',
+                '[class*="Gnb"] > ul > li', '[class*="GNB"] > ul > li',
+                '[class*="gnb"] > ul > li', '[class*="Menu"] > ul > li',
+                '[role="menubar"] > [role="menuitem"]',
+            ]
+            for sel in TOP_MENU_SELS:
+                try:
+                    items = page.query_selector_all(sel)
+                except Exception:
+                    continue
+                for item in items[:15]:  # top-level 보통 5~10개, 상한 15
+                    try:
+                        item.hover(timeout=1500)
+                        page.wait_for_timeout(350)  # 드롭다운 애니메이션/lazy render 대기
+                    except Exception:
+                        pass
+
             anchors = page.evaluate(
-                "() => Array.from(document.querySelectorAll('a[href]'))"
-                ".map(a => ({text: (a.innerText||a.textContent||'').trim(), href: a.getAttribute('href')}))"
+                """() => {
+                    const NAV_SELECTORS = [
+                        'nav', 'header', 'aside', '[role="navigation"]',
+                        '.gnb', '.lnb', '.nav', '.navbar', '.navigation',
+                        '.menu', '.main-menu', '.header-menu', '.site-menu',
+                        '.sidebar', '.side-menu', '.category', '.categories',
+                        '[class*="Nav"]', '[class*="Menu"]', '[class*="gnb"]',
+                        '[class*="navi"]',
+                        // 메가메뉴/드롭다운 — hover 시 DOM 에 추가되는 서브메뉴 영역
+                        '[class*="MegaMenu"]', '[class*="mega-menu"]', '[class*="mega_menu"]',
+                        '[class*="DropDown"]', '[class*="dropdown"]', '[class*="drop-down"]',
+                        '[class*="submenu"]', '[class*="sub-menu"]', '[class*="subNav"]',
+                        '[class*="SubNav"]', '[class*="Subnav"]',
+                        '[class*="Category"]', '[class*="GNB"]', '[class*="LNB"]',
+                        '[class*="sitemap"]', '[class*="Sitemap"]',
+                    ];
+                    const seen = new Set();
+                    const out = [];
+                    const pushA = (a) => {
+                        const href = a.getAttribute('href');
+                        if (!href) return;
+                        const key = href;
+                        if (seen.has(key)) return;
+                        seen.add(key);
+                        out.push({
+                            text: (a.innerText || a.textContent || '').replace(/\\s+/g,' ').trim(),
+                            href: href,
+                        });
+                    };
+                    // 1차: 명시적 네비 컨테이너
+                    for (const sel of NAV_SELECTORS) {
+                        for (const container of document.querySelectorAll(sel)) {
+                            for (const a of container.querySelectorAll('a[href]')) {
+                                pushA(a);
+                            }
+                        }
+                    }
+                    // 2차 fallback: 네비 컨테이너가 하나도 없거나 수집 결과가 너무 적으면
+                    // 페이지 상단 15% (viewport 기준) 영역 링크 보강.
+                    if (out.length < 5) {
+                        const threshold = window.innerHeight * 0.15;
+                        for (const a of document.querySelectorAll('a[href]')) {
+                            const rect = a.getBoundingClientRect();
+                            if (rect.top >= 0 && rect.top < threshold) {
+                                pushA(a);
+                            }
+                        }
+                    }
+                    return out;
+                }"""
             )
-            results = [a for a in anchors if a and a.get("href")]
+            results = [a for a in (anchors or []) if a and a.get("href")]
         finally:
             context.close()
             browser.close()
@@ -131,31 +215,45 @@ def discover_job_menus(root_url: str, timeout_ms: int = 15000) -> list[dict]:
         href = (a.get("href") or "").strip()
         if not href or href.startswith("#") or href.startswith("javascript:"):
             continue
+        # mailto:/tel: 같은 비-http 스킴 배제
+        if ":" in href and not href.startswith("/") and not href.startswith("http"):
+            continue
         full = urljoin(root_url, href).split("#")[0]
-        # 같은 origin 만
         try:
             p = urlparse(full)
         except Exception:
             continue
+        # 같은 origin 만 (서브도메인 다르면 다른 사이트로 간주)
         if p.netloc and p.netloc != parsed.netloc:
             continue
-        score = _score_link(text, full)
-        if score <= 0:
-            continue
+        # 키워드 필터 제거 — 네비 영역의 모든 메뉴를 LLM 에게 판별 맡김.
+        # (이전엔 _score_link 가 채용 키워드 없으면 버렸는데, 그러면 "중소기업" 같이
+        # 키워드 없는 카테고리 메뉴는 LLM 에 도달 못 함. 사용자 요구 대비 누락.)
         key = full.rstrip("/")
+        menu_name = (text[:40] or full.split("/")[-1] or "menu")
         if key in candidates:
-            # 더 높은 점수면 갱신
-            if score > candidates[key]["score"]:
-                candidates[key]["score"] = score
-                if text:
-                    candidates[key]["menu_name"] = text[:40]
+            # 텍스트가 더 설명적이면 갱신
+            if text and len(text) > len(candidates[key]["menu_name"]):
+                candidates[key]["menu_name"] = menu_name
             continue
         candidates[key] = {
-            "menu_name": (text[:40] or full.split("/")[-1] or "menu"),
+            "menu_name": menu_name,
             "url": full,
-            "score": score,
+            "score": 1,  # 스코어는 의미 잃음 — LLM 이 판단
         }
 
+    # 동일 URL 패턴 축약 — path 의 숫자 부분을 <id> 로 치환해서 템플릿이 같으면
+    # 하나만 대표로 남김. 알바몬 `/jobs/brand/special/214..229` 같은 개별 상세 URL
+    # 군이 상위를 점유하는 상황 방지.
+    pattern_seen: dict[str, dict] = {}
+    for c in candidates.values():
+        path = urlparse(c["url"]).path
+        template = re.sub(r"/\d+(?=/|$|\?)", "/<id>", path)
+        key = f"{urlparse(c['url']).netloc}{template}"
+        cur = pattern_seen.get(key)
+        if cur is None or c["score"] > cur["score"]:
+            pattern_seen[key] = c
+
     # 스코어 내림차순 정렬 + 상한
-    ordered = sorted(candidates.values(), key=lambda x: x["score"], reverse=True)
+    ordered = sorted(pattern_seen.values(), key=lambda x: x["score"], reverse=True)
     return ordered[:MAX_MENU_CANDIDATES]

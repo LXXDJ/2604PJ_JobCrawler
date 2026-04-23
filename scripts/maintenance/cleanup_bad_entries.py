@@ -5,7 +5,7 @@
 import json
 import os
 
-PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     "data", "sites.json")
 
 with open(PATH, "r", encoding="utf-8") as f:

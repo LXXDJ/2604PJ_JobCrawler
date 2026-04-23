@@ -481,7 +481,7 @@ Imports / Shinhan Bank America 등).
 
 ### Phase 4: 대량 발굴 + 실측 — 미완
 - 캄보디아 구인 사이트 50~100개 발굴
-- `analyze` 배치 스크립트 (`scripts/batch_analyze.py` 시작점 마련)
+- `analyze` 배치 스크립트 (`scripts/batch/batch_analyze.py` 시작점 마련)
 - 성공률 / 실패 유형 분류
 
 ### Phase 2.9 (후보): Playwright 렌더 HTML 을 retry 에 공급 — 미완

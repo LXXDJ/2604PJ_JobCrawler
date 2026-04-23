@@ -180,7 +180,9 @@ USER_AGENT = (
 )
 
 # 네트워크가 잠잠해진 후에도 lazy-load / 지연 XHR 를 잡기 위한 추가 대기 (ms)
-POST_LOAD_WAIT_MS = 4000
+# 알바몬/사람인 같이 SPA 가 필터 옵션 API 먼저 호출하고 실제 공고 API 는 스크롤 / 사용자
+# 인터랙션 이후에 호출되는 경우 대응. 15초로 늘리고 추가로 아래 루프에서 스크롤 시도.
+POST_LOAD_WAIT_MS = 15_000
 
 # 응답 본문 최대 크기 — 이보다 크면 "목록 API 가 아닌 대용량 자원" 으로 보고 스킵
 MAX_RESPONSE_BYTES = 500_000
@@ -470,6 +472,18 @@ class PlaywrightDiscoveryStrategy(AnalysisStrategy):
                 )
             except Exception:
                 pass  # 일부 SPA 는 load 이벤트 안 쏴 — 그래도 캡처된 건 쓸 수 있음
+
+            # 스크롤로 lazy-load 유도 — 알바몬·사람인 등 SPA 가 공고 API 를 초기 로드가
+            # 아닌 viewport 진입 시에만 호출하는 경우 대응. 여러 단계 스크롤 + 각 단계
+            # 대기로 네트워크 응답 캡처.
+            try:
+                for scroll_ratio in (0.3, 0.6, 0.9, 0.5, 1.0):
+                    page.evaluate(
+                        f"window.scrollTo(0, document.body.scrollHeight * {scroll_ratio})"
+                    )
+                    page.wait_for_timeout(1500)
+            except Exception:
+                pass
 
             # lazy-load / 지연 XHR 잡기용 추가 대기
             page.wait_for_timeout(self.post_load_wait_ms)
