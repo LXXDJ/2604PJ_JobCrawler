@@ -271,28 +271,33 @@ def cmd_add(url: str):
         print(f"  notes      : {result.notes}")
 
     # --- 등록 가능성 체크 (1차 구조) ---
-    ok, reason = sites_registry.can_register(result)
-    if not ok:
-        print(f"\n[거부] {reason}")
-        print("  → sites.json에 등록하지 않음.")
-        return
+    # 홈 URL 이 SPA/unknown 으로 판정되면 기존엔 바로 거부했지만, 이제는 multi-menu
+    # (네비에서 공고 메뉴 탐색) 는 시도해야 함. primary_ok=False 이면 primary validator/
+    # retry 스킵하고 multi-menu 결과로만 등록 판정.
+    primary_ok, reason = sites_registry.can_register(result)
+    if not primary_ok:
+        print(f"\n[알림] primary 분석: {reason}")
+        print(f"       홈 URL 에서 공고 리스트 구조 미감지 — 네비 탐색으로 메뉴 탐색만 진행")
 
-    # --- 중복 체크용: result.config 를 entry 모양으로 감싸기 ---
-    candidate_entry = sites_registry.wrap_flat_config_as_entry(result.config)
-
-    # --- 하드코딩된 REGISTERED_CRAWLS와의 중복 체크 ---
-    hardcoded_dup = sites_registry.find_duplicate(candidate_entry, REGISTERED_CRAWLS)
-    if hardcoded_dup:
-        print(f"\n[경고] 이 사이트/보드는 REGISTERED_CRAWLS에 이미 등록돼 있음 "
-              f"(site_id='{hardcoded_dup['site_id']}').")
-        print(f"       sites.json에도 추가하면 매 crawl 실행 시 중복 크롤링됨.")
-        if input("그래도 진행? (y/N): ").strip().lower() != "y":
-            print("취소.")
-            return
-
-    # --- sites.json 내 중복 체크 ---
+    # --- 중복 체크 — URL 기반 (primary 결과와 무관하게 실행) ---
     entries = sites_registry.load_all(SITES_JSON_PATH)
-    existing = sites_registry.find_duplicate(candidate_entry, entries)
+    existing = next(
+        (e for e in entries if (e.get("url") or "").rstrip("/") == url.rstrip("/")),
+        None,
+    )
+    # primary_ok 인 경우에만 REGISTERED_CRAWLS / flat-config 기반 중복 체크 추가 수행
+    if primary_ok:
+        candidate_entry = sites_registry.wrap_flat_config_as_entry(result.config)
+        hardcoded_dup = sites_registry.find_duplicate(candidate_entry, REGISTERED_CRAWLS)
+        if hardcoded_dup:
+            print(f"\n[경고] 이 사이트/보드는 REGISTERED_CRAWLS에 이미 등록돼 있음 "
+                  f"(site_id='{hardcoded_dup['site_id']}').")
+            print(f"       sites.json에도 추가하면 매 crawl 실행 시 중복 크롤링됨.")
+            if input("그래도 진행? (y/N): ").strip().lower() != "y":
+                print("취소.")
+                return
+        if existing is None:
+            existing = sites_registry.find_duplicate(candidate_entry, entries)
 
     if existing:
         print(f"\n이미 등록된 사이트:")
@@ -303,11 +308,9 @@ def cmd_add(url: str):
         if choice != "y":
             print("스킵.")
             return
-        # 기존 엔트리 제거하고 site_id 재사용
         entries = [e for e in entries if e.get("site_id") != existing["site_id"]]
         site_id = existing["site_id"]
     else:
-        # --- site_id 자동 추출 + 충돌 회피 ---
         desired = sites_registry.extract_site_id(url)
         taken = {e["site_id"] for e in REGISTERED_CRAWLS}
         taken.update(e["site_id"] for e in entries)
@@ -317,9 +320,7 @@ def cmd_add(url: str):
 
     print(f"\n  site_id    : {site_id}")
 
-    # --- 2차 검증: validator 로 실제 HTML/state 에서 config 동작 확인 ---
-    # analyzer 가 받은 HTML 을 노출하지 않으므로 한 번 더 fetch.
-    # LLM 이 환각한 selectors/경로나 stale 테마를 여기서 잡는다.
+    # --- 2차 검증: primary_ok 일 때만 validator 로 실제 동작 확인 ---
     from http_client import fetch
     from analyzer.validator import (
         validate_dom_config,
@@ -327,50 +328,58 @@ def cmd_add(url: str):
         validate_api_config,
     )
 
-    try:
-        new_config = sites_registry.analysis_to_new_schema_config(result, url)
-    except Exception as e:
-        print(f"\n[거부] 신 스키마 변환 실패: {type(e).__name__}: {e}")
-        return
-
-    method = new_config["extraction_method"]
-
-    if method == "api":
-        # API 경로는 HTML 불필요 — 엔드포인트 직접 호출
-        report = validate_api_config(new_config)
-    else:
-        # dom / embedded_json 은 HTML 필요
+    new_config = None
+    report = None
+    if primary_ok:
         try:
-            html = fetch(
-                url,
-                timeout=HTTP_TIMEOUT,
-                max_retries=HTTP_MAX_RETRIES,
-                retry_backoff=HTTP_RETRY_BACKOFF,
-            )
+            new_config = sites_registry.analysis_to_new_schema_config(result, url)
         except Exception as e:
-            print(f"\n[거부] 검증용 HTML 재다운로드 실패: {type(e).__name__}: {e}")
-            return
+            print(f"\n[알림] 신 스키마 변환 실패: {type(e).__name__}: {e} — multi-menu 로만 진행")
+            new_config = None
 
-        if method == "dom":
-            report = validate_dom_config(html, new_config)
-        elif method == "embedded_json":
-            # 렌더 경로는 url 필요 (html 은 무시됨)
-            report = validate_embedded_json_config(html, new_config, url=url)
+    # primary validator — new_config 있을 때만 실행. 없으면 multi-menu 로만 판정.
+    html = None
+    if new_config is not None:
+        method = new_config["extraction_method"]
+
+        if method == "api":
+            report = validate_api_config(new_config)
         else:
-            print(f"\n[거부] extraction_method={method!r} 에 대한 validator 없음")
-            return
-    print(f"\n  validator  : ok={report.ok}")
-    if report.sample_titles:
-        print(f"               샘플 제목: {report.sample_titles}")
-    if report.fields_matched:
-        print(f"               매칭: {report.fields_matched}")
+            # dom / embedded_json 은 HTML 필요
+            try:
+                html = fetch(
+                    url,
+                    timeout=HTTP_TIMEOUT,
+                    max_retries=HTTP_MAX_RETRIES,
+                    retry_backoff=HTTP_RETRY_BACKOFF,
+                )
+            except Exception as e:
+                print(f"\n[알림] primary HTML 재다운로드 실패: {type(e).__name__}: {e} — multi-menu 로만 진행")
+                new_config = None
+
+            if new_config is not None:
+                if method == "dom":
+                    report = validate_dom_config(html, new_config)
+                elif method == "embedded_json":
+                    report = validate_embedded_json_config(html, new_config, url=url)
+                else:
+                    print(f"\n[알림] extraction_method={method!r} 에 대한 validator 없음 — multi-menu 로만 진행")
+                    new_config = None
+    if report is not None:
+        print(f"\n  validator  : ok={report.ok}")
+        if report.sample_titles:
+            print(f"               샘플 제목: {report.sample_titles}")
+        if report.fields_matched:
+            print(f"               매칭: {report.fields_matched}")
 
     retry_history: list = []  # Phase 2.7: retry 시도 기록 → validation_report 에 첨부
 
-    # --- Phase 2.7: DOM validator 실패 시 LLM retry 루프 ---
+    # --- Phase 2.7: DOM validator 실패 시 LLM retry 루프 (primary 가 있을 때만) ---
     if (
-        not report.ok
-        and method == "dom"
+        new_config is not None
+        and report is not None
+        and not report.ok
+        and new_config.get("extraction_method") == "dom"
         and VALIDATOR_RETRY_MAX > 0
         and LLM_API_KEY
     ):
@@ -424,13 +433,15 @@ def cmd_add(url: str):
             if report.ok:
                 break
 
-    # --- API validator 실패 시 LLM Ranker 재시도 루프 ---
+    # --- API validator 실패 시 LLM Ranker 재시도 루프 (primary 가 있을 때만) ---
     # 필터옵션/코드테이블로 판명된 후보를 exclude 하고 LLM 에 다른 후보 요청.
     # 풀은 playwright_discovery 가 result.config["_ranker_pool"] 에 남겨둠.
     # (링커리어·알바몬처럼 GraphQL 필터 API / 브랜드코드 API 를 1위로 오인식하는 케이스용)
     if (
-        not report.ok
-        and method == "api"
+        new_config is not None
+        and report is not None
+        and not report.ok
+        and new_config.get("extraction_method") == "api"
         and VALIDATOR_RETRY_MAX > 0
         and LLM_API_KEY
     ):
@@ -518,12 +529,13 @@ def cmd_add(url: str):
 
                 excluded_idxs.append(new_idx)
 
-    if not report.ok:
-        print(f"\n[거부] validator 실패: {report.reason}")
-        if retry_history:
-            print(f"  → retry {len(retry_history)}회 시도 후에도 실패.")
-        print("  → sites.json에 저장하지 않음. selectors 재확인 필요.")
-        return
+    # primary validator 가 최종 실패이면 primary 를 무효화하고 multi-menu 만으로 판정.
+    # primary 가 있어도 없어도 아래 multi-menu 단계는 항상 시도한다.
+    if new_config is not None and (report is None or not report.ok):
+        reason_msg = report.reason if report is not None else "(report 없음)"
+        print(f"\n[알림] primary validator 실패: {reason_msg} — primary 제외, multi-menu 로만 진행")
+        new_config = None
+        report = None
 
     # === 메뉴 탐색 + LLM 판별 — 홈은 크롤 대상에서 제외 ===
     # 입력 URL(홈) 은 "진입점" 일 뿐이지 공고 리스트 페이지 자체가 아닌 경우가 대부분.
@@ -574,7 +586,17 @@ def cmd_add(url: str):
             continue
         flag = "OK" if verdict.is_job_list else "skip"
         print(f"      LLM {flag} [{verdict.coverage}] — {verdict.reason[:110]}")
+        # 디버그: LLM OK 한 메뉴에서 captured_apis 덤프 (Playwright 가 뭘 잡았는지 눈으로 확인)
         if verdict.is_job_list:
+            apis = verdict.captured_apis or []
+            best_idx = verdict.best_api_index
+            print(f"        captured APIs: {len(apis)}, best_idx={best_idx}, "
+                  f"page_text_len={len(verdict.page_text or '')}")
+            for i, api in enumerate(apis[:15]):
+                shape = str(api.get("shape") or "")[:100]
+                marker = " ★" if i == best_idx else ""
+                print(f"        [{i}]{marker} {api['method']} {api['size']:>6}B "
+                      f"{api['url'][:105]}  shape={shape}")
             verdicts.append((cand, verdict))
 
     # coverage 기반 분류
@@ -699,9 +721,20 @@ def cmd_add(url: str):
     # 경우, build_entry 는 result.config 에서 재계산해서 덮어쓰므로 mutation 이 사라진다.
     # 여기 시점엔 이미 new_config 가 "검증 통과한 최종 형태" 이므로 그대로 저장.
     from datetime import datetime, timezone
-    report_dict = report.to_dict()
-    if retry_history:
-        report_dict["retry_history"] = retry_history
+
+    # validation_report — primary 가 있었으면 그 report, 없었으면 multi-menu 요약
+    if report is not None:
+        report_dict = report.to_dict()
+        if retry_history:
+            report_dict["retry_history"] = retry_history
+    else:
+        report_dict = {
+            "ok": True,
+            "reason": f"primary 분석 무효 — multi-menu {len(sources_list)}개 메뉴로 등록",
+            "items_extracted": 0,
+            "fields_matched": {},
+            "sample_titles": [],
+        }
 
     # sources[0] 정보를 루트 레벨에도 복사 — dispatcher/크롤러 v1 역호환용.
     # 홈 source 가 아니라 LLM 이 고른 첫 "공고 리스트 메뉴" 의 config 가 primary 가 된다.

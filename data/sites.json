@@ -520,51 +520,6 @@
     }
   },
   {
-    "site_id": "saramin",
-    "url": "https://www.saramin.co.kr/zf_user/jobs/list/job-category",
-    "site_type": "static_html",
-    "added_at": "2026-04-21T04:56:32.807273+00:00",
-    "extraction_method": "dom",
-    "requires_render": false,
-    "source": {
-      "list_url": "https://www.saramin.co.kr/zf_user/jobs/list/job-category",
-      "list_params": {},
-      "base_url": "https://www.saramin.co.kr",
-      "selectors": {
-        "list_rows": ".item",
-        "subject_link": "a strong.tit",
-        "author": "span.corp",
-        "date": "span.date",
-        "hit": "unknown",
-        "content": "unknown"
-      },
-      "parse_mode": "direct",
-      "skip_row_if_has_class": []
-    },
-    "pagination": {
-      "type": "url_param",
-      "param": "page",
-      "start": 1
-    },
-    "validated": true,
-    "validation_report": {
-      "ok": true,
-      "reason": "",
-      "items_extracted": 79,
-      "fields_matched": {
-        "title": 78,
-        "author": 78,
-        "date": 78,
-        "hit": 0
-      },
-      "sample_titles": [
-        "식품(차류) 패키지디자이너 모집",
-        "[피터팬의 좋은방 구하기] 영업 채용",
-        "디지털 퍼포먼스마케터 경력"
-      ]
-    }
-  },
-  {
     "site_id": "jobplanet",
     "url": "https://www.jobplanet.co.kr/job",
     "site_type": "api_discovered",

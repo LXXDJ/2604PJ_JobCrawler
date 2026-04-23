@@ -69,7 +69,7 @@ def _score_link(text: str, href: str) -> int:
     return score
 
 
-def _extract_links_with_playwright(url: str, timeout_ms: int = 15000) -> list[dict]:
+def _extract_links_with_playwright(url: str, timeout_ms: int = 45000) -> list[dict]:
     """Playwright 로 URL 로드 → 네비게이션 영역의 링크만 수집.
 
     본문/광고/푸터 링크는 제외하고 "메뉴" 역할의 anchor 만 대상.
@@ -91,15 +91,43 @@ def _extract_links_with_playwright(url: str, timeout_ms: int = 15000) -> list[di
             proxy_cfg["password"] = pu.password
         launch_kwargs["proxy"] = proxy_cfg
 
+    USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    )
     results: list[dict] = []
     with sync_playwright() as p:
         browser = p.chromium.launch(**launch_kwargs)
-        context = browser.new_context(ignore_https_errors=True)
+        context = browser.new_context(
+            ignore_https_errors=True,
+            user_agent=USER_AGENT,
+            locale="ko-KR",
+            viewport={"width": 1400, "height": 900},
+        )
+        # 헤드리스 시그널 숨기기 — 기본 headless Chromium 은 navigator.webdriver=true
+        # 로 표시돼 사이트가 차단 (사람인 등). stealth_fetcher 와 같은 기법.
+        context.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+        )
         page = context.new_page()
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            # commit: 첫 바이트 도착하면 OK. domcontentloaded 이면 SPA 의 초기 JS 번들
+            # 전부 받아야 해서 사람인 같은 무거운 홈은 20s 도 부족. commit 후 고정 대기로 전환.
             try:
-                page.wait_for_load_state("networkidle", timeout=5000)
+                page.goto(url, wait_until="commit", timeout=timeout_ms)
+            except Exception:
+                # 그래도 timeout 나면 최소 body 로딩 시도
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                except Exception:
+                    pass
+            # DOM 렌더/네비 펼쳐지길 기다림
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                pass
+            try:
+                page.wait_for_load_state("networkidle", timeout=8000)
             except Exception:
                 pass  # networkidle 타임아웃은 무시 (SPA 가 계속 polling 할 수 있음)
 
@@ -166,15 +194,12 @@ def _extract_links_with_playwright(url: str, timeout_ms: int = 15000) -> list[di
                             }
                         }
                     }
-                    // 2차 fallback: 네비 컨테이너가 하나도 없거나 수집 결과가 너무 적으면
-                    // 페이지 상단 15% (viewport 기준) 영역 링크 보강.
+                    // 2차 fallback: 네비 컨테이너 매치가 너무 적으면 body 전체 <a> 스캔.
+                    // 사람인/잡코리아 처럼 커스텀 태그 쓰는 사이트는 nav/.gnb 가 안 걸려서
+                    // 이 fallback 이 필수. same-origin / 패턴 중복 제거는 Python 쪽에서 처리.
                     if (out.length < 5) {
-                        const threshold = window.innerHeight * 0.15;
                         for (const a of document.querySelectorAll('a[href]')) {
-                            const rect = a.getBoundingClientRect();
-                            if (rect.top >= 0 && rect.top < threshold) {
-                                pushA(a);
-                            }
+                            pushA(a);
                         }
                     }
                     return out;
@@ -187,19 +212,66 @@ def _extract_links_with_playwright(url: str, timeout_ms: int = 15000) -> list[di
     return results
 
 
-def discover_job_menus(root_url: str, timeout_ms: int = 15000) -> list[dict]:
+def _static_anchors_via_curl(root_url: str) -> list[dict]:
+    """curl_cffi(Chrome 131 impersonate) 로 HTML 받아 a[href] 파싱.
+
+    Playwright 헤드리스가 봇 차단으로 블록당하는 사이트(사람인 등) 에서
+    SSR 렌더된 네비 메뉴를 건져내는 fallback/보강.
+    """
+    try:
+        from http_client import fetch
+    except ImportError:
+        try:
+            from crawlers.http_client import fetch
+        except ImportError:
+            return []
+    try:
+        html = fetch(root_url, timeout=30, max_retries=1)
+    except Exception as e:
+        print(f"    [menu_discovery] curl_cffi fetch 실패 — {type(e).__name__}: {str(e)[:100]}")
+        return []
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
+        return []
+    out: list[dict] = []
+    for a in soup.select("a[href]"):
+        out.append({
+            "text": a.get_text(strip=True),
+            "href": a.get("href") or "",
+        })
+    return out
+
+
+def discover_job_menus(root_url: str, timeout_ms: int = 45000) -> list[dict]:
     """사이트의 네비게이션에서 "구인/채용" 메뉴 후보 추출.
 
-    Returns: [{menu_name, url, score}, ...]  score 내림차순. root_url 자체도 포함.
+    전략 (병행):
+      1. curl_cffi 로 정적 HTML fetch → SSR 메뉴 수집 (봇 차단 우회)
+      2. Playwright 로 hover/스크롤 → 동적 메뉴 수집
+    둘을 합친 뒤 same-origin + 패턴 중복 제거.
+
+    Returns: [{menu_name, url, score}, ...]  score 내림차순.
     """
     parsed = urlparse(root_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
 
+    # 1. 정적 fetch
+    anchors_static = _static_anchors_via_curl(root_url)
+    if anchors_static:
+        print(f"    [menu_discovery] curl_cffi 정적 수집: {len(anchors_static)}개 a 태그")
+
+    # 2. 동적 수집 (hover 포함)
     try:
-        anchors = _extract_links_with_playwright(root_url, timeout_ms)
+        anchors_dynamic = _extract_links_with_playwright(root_url, timeout_ms)
+        if anchors_dynamic:
+            print(f"    [menu_discovery] Playwright 동적 수집: {len(anchors_dynamic)}개 a 태그")
     except Exception as e:
-        print(f"    [menu_discovery] Playwright 실패 — {type(e).__name__}: {e}")
-        anchors = []
+        print(f"    [menu_discovery] Playwright 실패 — {type(e).__name__}: {str(e)[:100]}")
+        anchors_dynamic = []
+
+    anchors = anchors_static + anchors_dynamic
 
     candidates: dict[str, dict] = {}  # url → {menu_name, url, score}
 
