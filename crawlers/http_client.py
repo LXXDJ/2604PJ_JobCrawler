@@ -15,6 +15,11 @@ from typing import Optional
 import requests as _requests_legacy  # 예외 타입만 사용
 from curl_cffi import requests as cffi_requests
 
+try:
+    from proxy_pool import GLOBAL as _PROXY_POOL
+except ImportError:
+    from crawlers.proxy_pool import GLOBAL as _PROXY_POOL
+
 
 # 실제 Chrome 131 의 JA3/HTTP2 프로파일을 그대로 흉내낸다.
 # curl_cffi 가 지원하는 target 중 가장 최신 안정판.
@@ -79,7 +84,17 @@ def fetch(
     last_exception = None
     cf_bypass_attempted = False
 
+    # proxy 풀 활성화면 매 attempt 마다 다른 proxy 시도. 403 받은 proxy 는 cool-down.
+    tried_proxies: set[str] = set()
+
     for attempt in range(1, max_retries + 1):
+        proxy_obj = _PROXY_POOL.pick(exclude=tried_proxies) if _PROXY_POOL else None
+        proxies_arg = None
+        if proxy_obj:
+            proxy_url = _PROXY_POOL.to_url(proxy_obj)
+            proxies_arg = {"http": proxy_url, "https": proxy_url}
+            tried_proxies.add(f"{proxy_obj['host']}:{proxy_obj['port']}")
+
         try:
             response = cffi_requests.get(
                 url,
@@ -89,6 +104,7 @@ def fetch(
                 timeout=timeout,
                 verify=verify_ssl,
                 impersonate=_IMPERSONATE_TARGET,
+                proxies=proxies_arg,
             )
             response.raise_for_status()
             if attempt > 1:
@@ -101,6 +117,15 @@ def fetch(
             # → 통합해서 status_code 속성 유무로 분기.
             status = getattr(getattr(e, "response", None), "status_code", None)
             is_http_error = status is not None
+
+            # 403 받은 proxy 는 cool-down 으로 빼두기
+            if status == 403 and proxy_obj:
+                _PROXY_POOL.mark_failed(proxy_obj)
+                # 풀에 다른 proxy 가 남아있으면 즉시 다른 IP 로 재시도
+                remaining = len(_PROXY_POOL) - len(tried_proxies)
+                if remaining > 0 and attempt < max_retries:
+                    print(f"      [proxy] 403 — {proxy_obj['host']} cool-down, 다른 IP 로 재시도 ({remaining}개 남음)")
+                    continue
 
             if is_http_error:
                 # 403 + CF bypass 옵션 켜졌으면 Playwright 쿠키 워밍업 한 번 시도
