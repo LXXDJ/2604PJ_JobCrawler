@@ -1964,20 +1964,20 @@
     }
   },
   {
-    "site_id": "career",
+    "site_id": "co",
     "url": "https://job.career.co.kr/jobs/",
     "site_type": "static_html",
-    "added_at": "2026-04-27T01:51:50.129970+00:00",
+    "added_at": "2026-04-27T01:04:09.006691+00:00",
     "extraction_method": "dom",
     "source": {
-      "list_url": "https://job.career.co.kr/OpenJobs/newsflash",
+      "list_url": "https://job.career.co.kr/jobs/etc/intern",
       "list_params": {},
       "base_url": "https://job.career.co.kr",
       "selectors": {
-        "list_rows": "tbody > tr",
-        "subject_link": "td:nth-child(2) > div > div > div.tpNm > a",
-        "author": "unknown",
-        "date": "td:nth-child(5) > div.txsArea > span.itx:nth-of-type(1)",
+        "list_rows": "tbody tr",
+        "subject_link": "td:nth-child(2) a",
+        "author": "td:nth-child(1) .cttCkNm .tpNm .tx",
+        "date": "td:nth-child(5) .txsArea:nth-child(2) .itx",
         "hit": "unknown",
         "content": "unknown"
       },
@@ -1991,43 +1991,18 @@
     },
     "sources": [
       {
-        "menu_name": "채용속보",
-        "url": "https://job.career.co.kr/OpenJobs/newsflash",
+        "menu_name": "경험이 최고!인턴으로 경험을 쌓고직장인으로 가자!바로가기",
+        "url": "https://job.career.co.kr/jobs/etc/intern",
         "extraction_method": "dom",
         "source": {
-          "list_url": "https://job.career.co.kr/OpenJobs/newsflash",
-          "list_params": {},
-          "base_url": "https://job.career.co.kr",
-          "selectors": {
-            "list_rows": "tbody > tr",
-            "subject_link": "td:nth-child(2) > div > div > div.tpNm > a",
-            "author": "unknown",
-            "date": "td:nth-child(5) > div.txsArea > span.itx:nth-of-type(1)",
-            "hit": "unknown",
-            "content": "unknown"
-          },
-          "parse_mode": "direct",
-          "skip_row_if_has_class": []
-        },
-        "pagination": {
-          "type": "url_param",
-          "param": "page",
-          "start": 1
-        }
-      },
-      {
-        "menu_name": "대기업만 판다!대기업만 파는 당신에게딱 맞는 공고바로가기",
-        "url": "https://job.career.co.kr/jobs/etc/major",
-        "extraction_method": "dom",
-        "source": {
-          "list_url": "https://job.career.co.kr/jobs/etc/major",
+          "list_url": "https://job.career.co.kr/jobs/etc/intern",
           "list_params": {},
           "base_url": "https://job.career.co.kr",
           "selectors": {
             "list_rows": "tbody tr",
             "subject_link": "td:nth-child(2) a",
-            "author": "unknown",
-            "date": "tbody tr td:nth-child(5) .txsArea",
+            "author": "td:nth-child(1) .cttCkNm .tpNm .tx",
+            "date": "td:nth-child(5) .txsArea:nth-child(2) .itx",
             "hit": "unknown",
             "content": "unknown"
           },
@@ -2041,20 +2016,20 @@
         }
       },
       {
-        "menu_name": "고등학교",
-        "url": "https://job.career.co.kr/jobs/school/high",
+        "menu_name": "대학원 수료",
+        "url": "https://job.career.co.kr/jobs/school/graduate",
         "extraction_method": "dom",
         "source": {
-          "list_url": "https://job.career.co.kr/jobs/school/high",
+          "list_url": "https://job.career.co.kr/jobs/school/graduate",
           "list_params": {},
           "base_url": "https://job.career.co.kr",
           "selectors": {
             "list_rows": "tbody tr",
-            "subject_link": "td div.cttCntArea div.txtBx div.tpNm a",
-            "author": "unknown",
-            "date": "td div.txsArea.mt05 span.itx.cgray",
-            "hit": "unknown",
-            "content": "unknown"
+            "subject_link": "td:nth-child(2) a",
+            "author": null,
+            "date": "td:last-child .txsArea:nth-child(2) .itx",
+            "hit": null,
+            "content": null
           },
           "parse_mode": "direct",
           "skip_row_if_has_class": []
@@ -2066,20 +2041,20 @@
         }
       },
       {
-        "menu_name": "대학교졸업 (4년)",
-        "url": "https://job.career.co.kr/jobs/school/university",
+        "menu_name": "일정으로 보는 공채",
+        "url": "https://job.career.co.kr/OpenJobs/calendar_month",
         "extraction_method": "dom",
         "source": {
-          "list_url": "https://job.career.co.kr/jobs/school/university",
+          "list_url": "https://job.career.co.kr/OpenJobs/calendar_month",
           "list_params": {},
           "base_url": "https://job.career.co.kr",
           "selectors": {
-            "list_rows": "tbody tr",
-            "subject_link": "td:nth-child(2) div.cttCntArea div.txtBx div.tpNm a",
-            "author": "td:nth-child(1) div.cttCkNm div.txtBx div.tpNm div.tx",
-            "date": "td:nth-child(5) div.txsArea:nth-child(2) span.itx",
-            "hit": "",
-            "content": ""
+            "list_rows": "table tbody tr",
+            "subject_link": "div.dlUl div.dlTp a.tx",
+            "author": "unknown",
+            "date": "unknown",
+            "hit": "unknown",
+            "content": "unknown"
           },
           "parse_mode": "direct",
           "skip_row_if_has_class": []
@@ -2099,10 +2074,10 @@
           "list_params": {},
           "base_url": "https://job.career.co.kr",
           "selectors": {
-            "list_rows": "tbody > tr",
-            "subject_link": "td > div.cttCntArea > div.txtBx > div.tpNm > a",
-            "author": "td > div.cttCkNm > div.txtBx > div.tpNm > div",
-            "date": "td > div.txsArea:nth-child(2) span.itx",
+            "list_rows": "tbody tr",
+            "subject_link": "td:nth-child(2) a",
+            "author": "unknown",
+            "date": "td:nth-child(5) .txsArea span.itx:nth-child(2)",
             "hit": "unknown",
             "content": "unknown"
           },
@@ -2126,10 +2101,10 @@
           },
           "base_url": "https://job.career.co.kr",
           "selectors": {
-            "list_rows": "tbody > tr",
-            "subject_link": "td:nth-child(2) > div > div > div.tpNm > a",
+            "list_rows": "tbody tr",
+            "subject_link": "td:nth-child(2) a.tx",
             "author": null,
-            "date": "td:nth-child(5) > div > div.txsArea > span.itx:nth-child(2)",
+            "date": "td:last-child .txsArea:nth-child(2) .itx:last-child",
             "hit": null,
             "content": null
           },
@@ -2151,12 +2126,12 @@
           "list_params": {},
           "base_url": "https://job.career.co.kr",
           "selectors": {
-            "list_rows": "table tbody tr",
-            "subject_link": "div.cttCntArea div.txtBx div.tpNm a",
-            "author": "unknown",
-            "date": "unknown",
-            "hit": "unknown",
-            "content": "unknown"
+            "list_rows": "tbody > tr",
+            "subject_link": "td:nth-child(2) > div > div > div.tpNm > a",
+            "author": null,
+            "date": "td:nth-child(5) > div.txsArea > span.itx:last-child",
+            "hit": null,
+            "content": null
           },
           "parse_mode": "direct",
           "skip_row_if_has_class": []
@@ -2176,12 +2151,12 @@
           "list_params": {},
           "base_url": "https://job.career.co.kr",
           "selectors": {
-            "list_rows": "tbody > tr",
-            "subject_link": "td:nth-child(2) > .cttCntArea > .txtBx > .tpNm > a",
-            "author": null,
-            "date": "td:nth-child(5) > .txsArea:last-child > .itx.cgray",
-            "hit": null,
-            "content": null
+            "list_rows": "tbody tr",
+            "subject_link": "td:nth-child(2) a",
+            "author": "unknown",
+            "date": "td:nth-child(5) span.itx",
+            "hit": "unknown",
+            "content": "unknown"
           },
           "parse_mode": "direct",
           "skip_row_if_has_class": []
@@ -2201,13 +2176,12 @@
       "fields_matched": {
         "title": 30,
         "author": 30,
-        "date": 30,
-        "hit": 0
+        "date": 30
       },
       "sample_titles": [
         "대기업 골프장호텔 외식사업부(정규직)모집",
-        "전국 재택근무 및 화상수업 비대면면접 초중고등 학생들의 멘토가 되어주실 국어 영어 수학 과학선생님",
-        "산업별/지역별  SI/SM  프로젝트  안내"
+        "산업별/지역별  SI/SM  프로젝트  안내",
+        "(급구) 남.녀 단순 홀서빙/조문안내/초보환영/더리본 상조 행사 많음"
       ]
     }
   }

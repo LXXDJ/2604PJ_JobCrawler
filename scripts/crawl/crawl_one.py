@@ -1,6 +1,7 @@
 """지정한 site_id 만 dispatch 로 크롤링 (검증용)."""
 import sys, io, json, os
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", line_buffering=True)
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "crawlers"))

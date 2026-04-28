@@ -93,24 +93,44 @@ _SUBDOMAIN_SKIP_PREFIXES = {
     "mail", "smtp", "blog",
 }
 
+# 2단계 ccTLD — 도메인 끝에 붙으면 통째로 잘라내야 함.
+# 안 그러면 job.career.co.kr → "co" 같은 잘못된 site_id 가 나옴.
+_CCTLD_2LEVEL_SUFFIXES = (
+    ".co.kr", ".or.kr", ".go.kr", ".ac.kr", ".ne.kr", ".re.kr",
+    ".co.jp", ".or.jp", ".ne.jp",
+    ".co.uk", ".org.uk", ".gov.uk",
+    ".com.au", ".com.cn", ".com.tw", ".com.hk", ".com.sg",
+)
+
 
 def extract_site_id(url: str) -> str:
     """
     URL 에서 site_id 자동 추출.
       siemreap.korean.net   → siemreap     (맨 앞 토큰이 skip 목록 밖 — 그대로)
-      www.hanin.or.kr       → hanin        (www 스킵)
+      www.hanin.or.kr       → hanin        (www 스킵, .or.kr 절단)
       job.incruit.com       → incruit      (job 스킵)
       api.camhr.com         → camhr        (api 스킵)
-      www.jobkorea.co.kr    → jobkorea     (www 스킵)
+      www.jobkorea.co.kr    → jobkorea     (www 스킵, .co.kr 절단)
+      job.career.co.kr      → career       (job 스킵, .co.kr 절단)
+      careers.lg.com        → lg           (careers 스킵)
     """
-    host = urlparse(url).netloc.split(":")[0]  # port 제거
+    host = urlparse(url).netloc.split(":")[0].lower()  # port 제거
+    # 끝에 ccTLD 가 붙어있으면 통째로 잘라내야 "co" 같은 가짜 ID 안 나옴
+    for suf in _CCTLD_2LEVEL_SUFFIXES:
+        if host.endswith(suf):
+            host = host[: -len(suf)]
+            break
+    else:
+        # 일반 1-level TLD (.com, .net, .org, .kr 등) 마지막 토큰 잘라내기
+        if "." in host:
+            host = host.rsplit(".", 1)[0]
     parts = host.split(".")
-    # 의미 없는 접두어가 맨 앞에 연속되면 전부 스킵
-    while parts and parts[0].lower() in _SUBDOMAIN_SKIP_PREFIXES:
+    # 의미 없는 접두어 스킵 (단, 마지막 토큰 1개는 무조건 보존 → "site"로 빠지는 사고 방지)
+    while len(parts) > 1 and parts[0] in _SUBDOMAIN_SKIP_PREFIXES:
         parts = parts[1:]
     if not parts:
         return "site"
-    return parts[0].lower() or "site"
+    return parts[0] or "site"
 
 
 def resolve_unique_site_id(desired: str, taken: set) -> str:

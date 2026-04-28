@@ -1,6 +1,8 @@
 """지정한 site_id 를 전체 페이지 범위로 크롤링 (pagination 설정 그대로 준수)."""
 import sys, io, json, os
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+# line-buffered utf-8 → tee / 백그라운드 실행 시 로그 유실 방지
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", line_buffering=True)
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", line_buffering=True)
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "crawlers"))
