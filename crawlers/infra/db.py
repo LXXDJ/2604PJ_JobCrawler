@@ -48,9 +48,11 @@ CREATE TABLE IF NOT EXISTS jobs (
 
     first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_seen_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    closed_at     TEXT,
-
-    UNIQUE(site_id, external_id)
+    closed_at     TEXT
+    -- UNIQUE(site_id, external_id) 의도적으로 제거.
+    -- 같은 source 안에서 같은 공고가 sticky/promoted 형태로 여러 슬롯에 노출되면
+    -- 그 occurrence 마다 별개 row 로 적재 (사이트 라이브 카운트와 일치).
+    -- cross-source dedup 은 application 레벨 (runner) 에서 처리.
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_site         ON jobs(site_id);
@@ -88,9 +90,56 @@ def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def _migrate_jobs_drop_unique(conn: sqlite3.Connection) -> bool:
+    """기존 jobs 테이블에 UNIQUE(site_id, external_id) 제약이 있으면 제거.
+    SQLite 는 ALTER 로 제약 제거 불가 → 테이블 재생성.
+    Returns: True 면 마이그레이션 수행됨.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'"
+    ).fetchone()
+    if not row or "UNIQUE" not in (row["sql"] or ""):
+        return False
+
+    conn.executescript("""
+        PRAGMA foreign_keys = OFF;
+        ALTER TABLE jobs RENAME TO jobs_old_unique;
+        CREATE TABLE jobs (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            site_id       TEXT NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+            external_id   TEXT NOT NULL,
+            url           TEXT NOT NULL,
+            title         TEXT,
+            company       TEXT,
+            deadline      TEXT,
+            posted_at     TEXT,
+            raw           TEXT,
+            content_hash  TEXT,
+            first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+            last_seen_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            closed_at     TEXT
+        );
+        INSERT INTO jobs
+            (id, site_id, external_id, url, title, company, deadline, posted_at,
+             raw, content_hash, first_seen_at, last_seen_at, closed_at)
+        SELECT id, site_id, external_id, url, title, company, deadline, posted_at,
+             raw, content_hash, first_seen_at, last_seen_at, closed_at
+          FROM jobs_old_unique;
+        DROP TABLE jobs_old_unique;
+        CREATE INDEX IF NOT EXISTS idx_jobs_site         ON jobs(site_id);
+        CREATE INDEX IF NOT EXISTS idx_jobs_last_seen    ON jobs(last_seen_at);
+        CREATE INDEX IF NOT EXISTS idx_jobs_closed       ON jobs(closed_at);
+        PRAGMA foreign_keys = ON;
+    """)
+    return True
+
+
 def init_db(db_path: Path = DB_PATH) -> None:
     with get_conn(db_path) as conn:
         conn.executescript(SCHEMA)
+        # 기존 DB 의 UNIQUE 제약 제거 (마이그레이션)
+        if _migrate_jobs_drop_unique(conn):
+            print("[migration] jobs UNIQUE(site_id, external_id) 제거됨")
 
 
 if __name__ == "__main__":

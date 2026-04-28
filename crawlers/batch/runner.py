@@ -17,7 +17,7 @@ from typing import Callable, Optional
 
 from ..extractors.external_id import extract_external_id
 from ..infra.db import get_conn
-from ..infra.jobs_repo import upsert_job
+from ..infra.jobs_repo import insert_job
 from ..infra.sites_repo import get_site, record_attempt, update_status
 from .detail_crawler import fetch_detail
 from .list_crawler import crawl_list
@@ -128,7 +128,8 @@ def run_site(
         return rep
 
     run_id = _start_run(site_id)
-    already_seen = _existing_external_ids(site_id)  # DB 의 기존 공고 ID
+    already_seen = _existing_external_ids(site_id)  # DB 의 기존 공고 ID (cross-batch 증분)
+    cross_source_seen: set[str] = set()  # 이번 batch 안에서 이전 source 가 본 detail_url
     any_source_ok = False
     error_msgs: list[str] = []
 
@@ -172,10 +173,13 @@ def run_site(
             rows_to_process = listing.rows
             log(f"  [{site_id}]   list {listing.pages_crawled} pages, {len(listing.rows)} rows")
 
-        # 매 N 행마다 crawl_runs 진행 갱신 (대시보드 라이브 진행)
         progress_step = 25
         for j, row in enumerate(rows_to_process, 1):
             ext_id = extract_external_id(row.detail_url)
+
+            # cross-source dedup — 다른 source 에 같은 공고 있으면 skip
+            if row.detail_url in cross_source_seen:
+                continue
 
             detail = None
             if fetch_details:
@@ -189,24 +193,24 @@ def run_site(
                 "detail_url": row.detail_url,
                 "snippet": detail.raw_text_snippet if detail and detail.ok else None,
             }
-            outcome = upsert_job(
+            insert_job(
                 site_id=site_id,
                 external_id=ext_id,
                 url=row.detail_url,
                 title=title,
                 raw=raw,
             )
-            if outcome == "inserted":
-                rep.inserted += 1
-                already_seen.add(ext_id)
-            elif outcome == "updated":
-                rep.updated += 1
-            else:
-                rep.unchanged += 1
+            rep.inserted += 1
+            already_seen.add(ext_id)
 
             if j % progress_step == 0:
-                log(f"  [{site_id}]   ... {j}/{len(rows_to_process)} processed "
-                    f"(+{rep.inserted} ~{rep.updated})")
+                log(f"  [{site_id}]   ... {j}/{len(rows_to_process)} inserted "
+                    f"(+{rep.inserted})")
+
+        # source 끝난 후 그 source 의 detail_url 들을 cross_source_seen 에 추가
+        # (다음 source 가 같은 url 시도하면 skip)
+        for row in rows_to_process:
+            cross_source_seen.add(row.detail_url)
 
     rep.success = any_source_ok
 

@@ -193,27 +193,29 @@ def crawl_list(
     locked_sig = _normalize_sig(best.container_signature)
     result.container_signature = locked_sig
 
-    seen_urls: set[str] = set()
-    page1_new = 0
+    # within-source dedup 제거 — 같은 source 안 같은 공고가 sticky/promoted 형태로
+    # 여러 슬롯에 노출되면 그대로 다 yield. DB 에 별개 row 로 적재.
+    # cross-batch 증분 break: page 의 모든 raw row 의 external_id 가 seen_ids 안에
+    # 있으면 (= 새 공고 0) break.
+    page1_new_ids: set[str] = set()      # 이번 page 의 NEW external_id (break 판정용)
     page1_total = 0
+    page1_seen_ids: set[str] = set()     # 이번 page 안에서 본 external_id (다음 page learn 판정용)
     for row in _filter_by_prefix(best.rows, prefix):
-        if row.detail_url in seen_urls:
-            continue
-        seen_urls.add(row.detail_url)
         page1_total += 1
-        if _id_of(row.detail_url) in seen_ids:
-            continue  # 이미 DB 에 있는 공고 → skip
+        eid = _id_of(row.detail_url)
+        page1_seen_ids.add(eid)
+        if eid in seen_ids:
+            continue  # 이미 DB 에 있는 공고 → 적재 X (증분)
         result.rows.append(row)
-        page1_new += 1
+        page1_new_ids.add(eid)
     result.pages_crawled = 1
 
     if page1_total == 0:
         result.error = "page 1 rows did not match learned prefix"
         return result
 
-    log(f"    page 1: total={page1_total} new={page1_new}")
-    # 페이지 1 에 새 ID 가 0 이면 더 갈 필요 없음 (사이트 정렬이 최신순이라는 가정)
-    if seen_ids and page1_new == 0:
+    log(f"    page 1: total={page1_total} new_ids={len(page1_new_ids)} rows_added={sum(1 for r in result.rows)}")
+    if seen_ids and not page1_new_ids:
         return result
 
     # ---- pagination param
@@ -238,8 +240,9 @@ def crawl_list(
             if not same_sig_ext:
                 continue
             tbest = max(same_sig_ext, key=lambda e: e.count)
+            # page 1 의 external_id set 에 안 들어있는 id 개수 = 진짜 page 2
             t_new = sum(1 for row in _filter_by_prefix(tbest.rows, prefix)
-                        if row.detail_url and row.detail_url not in seen_urls)
+                        if row.detail_url and _id_of(row.detail_url) not in page1_seen_ids)
             if t_new >= MIN_ROWS:
                 learned = cand
                 log(f"    [learn page param] LEARNED: {cand}  (new rows on page 2 = {t_new})")
@@ -248,6 +251,11 @@ def crawl_list(
     else:
         page_param = detected
     result.pagination_param = page_param
+
+    # 같은 페이지 내 sticky 중복은 다 적재. 하지만 다른 페이지에서 같은 ID 다시
+    # 보이면 cross-page dedup 으로 skip (siemreap 처럼 사이트가 page query 무시
+    # 하고 같은 결과 반복하는 케이스 차단).
+    session_seen_ids: set[str] = set(page1_seen_ids)
 
     # ---- pages 2..N (같은 시그니처 + prefix 매칭만 채택)
     for page in range(2, max_pages + 1):
@@ -269,28 +277,31 @@ def crawl_list(
         if not page_rows:
             break
 
-        page_new = 0
-        page_total = 0
+        # 먼저 이 페이지의 ID set 만 추출 (적재 결정 전)
+        page_ids: set[str] = set()
         for row in page_rows:
-            if row.detail_url in seen_urls:
-                continue
-            seen_urls.add(row.detail_url)
+            page_ids.add(_id_of(row.detail_url))
+
+        # break 조건: 이 페이지의 모든 ID 가 이전 페이지에서 이미 봤음
+        # → 사이트가 page query 무시하거나 페이지네이션 끝
+        if page_ids and page_ids.issubset(session_seen_ids):
+            log(f"    break: page {page} 모든 ID 가 이미 봤음 ({len(page_ids)} IDs, pagination 끝/무작동)")
+            break
+
+        # 새 ID 가 일부라도 있으면 이 페이지의 모든 raw row 적재 (sticky 포함)
+        # cross-batch 증분: DB 에 이미 있는 ID 만 skip
+        page_total = 0
+        page_inserted = 0
+        for row in page_rows:
             page_total += 1
-            if _id_of(row.detail_url) in seen_ids:
-                continue
+            eid = _id_of(row.detail_url)
+            if eid in seen_ids:
+                continue  # cross-batch — DB 에 이미 있는 공고
             result.rows.append(row)
-            page_new += 1
+            page_inserted += 1
 
+        session_seen_ids.update(page_ids)
         result.pages_crawled = page
-        log(f"    page {page}: total={page_total} new={page_new}")
-
-        if page_total == 0:
-            # 같은 row 가 이전 페이지와 완전히 동일 → 페이지네이션 끝
-            log(f"    break: page {page} 모든 URL 이 이전 페이지와 동일")
-            break
-        if seen_ids and page_new == 0:
-            # 모든 row 가 already-seen → 더 가도 새 글 없음 (증분 종료)
-            log(f"    break: page {page} 모두 already_seen (증분 종료)")
-            break
+        log(f"    page {page}: total={page_total} added={page_inserted}")
 
     return result

@@ -1,4 +1,10 @@
-"""jobs 테이블 upsert + 마감 처리."""
+"""jobs 테이블 적재.
+
+- insert_job : 매번 INSERT (같은 source 안 sticky/promoted 같은 공고 multiple
+  occurrence 도 별개 행으로 적재). 현재 사용중인 함수.
+- upsert_job : 레거시 (UNIQUE 제약 시절). 더 이상 사용 X — 호환을 위해 보존.
+- mark_closed: 사용 X (사용자 요구 — 사라진 공고 추적 안 함).
+"""
 from __future__ import annotations
 
 import hashlib
@@ -7,6 +13,33 @@ import sqlite3
 from typing import Any, Iterable, Optional
 
 from .db import get_conn
+
+
+def insert_job(
+    *,
+    site_id: str,
+    external_id: str,
+    url: str,
+    title: Optional[str] = None,
+    company: Optional[str] = None,
+    deadline: Optional[str] = None,
+    posted_at: Optional[str] = None,
+    raw: Optional[dict] = None,
+) -> int:
+    """매번 INSERT. UNIQUE 제약 없음 — 같은 (site_id, external_id) 도 별개 행.
+    Returns: 새 row id.
+    """
+    raw_json = json.dumps(raw, ensure_ascii=False) if raw is not None else None
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO jobs
+              (site_id, external_id, url, title, company, deadline, posted_at, raw)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (site_id, external_id, url, title, company, deadline, posted_at, raw_json),
+        )
+        return int(cur.lastrowid)
 
 
 def _content_hash(payload: dict[str, Any]) -> str:
