@@ -148,9 +148,27 @@ def _eval_extraction(ext: ListExtraction) -> tuple[int, float]:
 
 
 def _unique_path_ratio(rows) -> float:
-    """detail URL 들의 path-만 고유성 비율. 진짜 list 는 ≈0, 메뉴 list 는 ≈1."""
+    """detail URL 들의 path 패턴 고유성 비율. 진짜 list 는 ≈0, 메뉴 list 는 ≈1.
+
+    path 안의 숫자/ID 부분을 placeholder 로 normalize 후 비교 — cambojob 의
+    `/jobs/jobs-show-22291-.htm`, `/jobs/jobs-show-22287-.htm` 처럼 path 에
+    ID 가 박힌 케이스도 normalize 하면 같은 패턴 (`/jobs/jobs-show-{N}-.htm`)
+    으로 보여 list 로 정상 인정.
+    """
+    import re as _re
     from urllib.parse import urlparse
-    paths = [urlparse(r.detail_url).path for r in rows if r.detail_url]
+
+    if not rows:
+        return 1.0
+    paths = []
+    for r in rows:
+        if not r.detail_url:
+            continue
+        p = urlparse(r.detail_url).path
+        # 숫자 sequence 를 {N} 으로, 영숫자 ID (8자 이상 영숫자) 를 {ID} 로
+        norm = _re.sub(r"\d+", "{N}", p)
+        norm = _re.sub(r"[A-Za-z0-9]{8,}", "{ID}", norm)
+        paths.append(norm)
     if not paths:
         return 1.0
     return len(set(paths)) / len(paths)

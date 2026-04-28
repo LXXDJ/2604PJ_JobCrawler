@@ -1,8 +1,10 @@
 """홈 fetch 결과 디버그용. 정적 fetch 후 <a> 링크 + 텍스트 일부 출력."""
+import io
 import sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 from bs4 import BeautifulSoup
 from crawlers.fetchers.static import fetch as fetch_static

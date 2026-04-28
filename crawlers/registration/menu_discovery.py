@@ -116,6 +116,99 @@ def _extract_links(html: str, base_url: str) -> list[tuple[str, str]]:
     return out
 
 
+_DETAIL_URL_PATTERNS = [
+    r"-show-\d+",       # cambojob: jobs-show-22291, news-show-248
+    r"/view/\d+",
+    r"/detail/\d+",
+    r"\bview\.do\b",
+    r"\.do\?[^=]*[Ss]eq=\d",
+    r"_no=\d",
+    r"\?id=\d{4,}",
+    r"/post/\d+",
+    r"/article/\d+",
+    r"/p/\d+",
+]
+_DETAIL_RE = re.compile("|".join(_DETAIL_URL_PATTERNS))
+
+
+def _is_detail_like(url: str) -> bool:
+    """URL 이 list 가 아닌 detail 페이지처럼 생겼는지."""
+    return bool(_DETAIL_RE.search(url))
+
+
+def _normalize_url_pattern(url: str) -> str:
+    """URL 의 숫자/keyword 부분을 placeholder 로 → 같은 패턴 dedup 용.
+    예: /jobs/jobs_list/key/客服.htm
+        /jobs/jobs_list/key/运营.htm
+        → 둘 다 /jobs/jobs_list/key/{KW}.htm
+    """
+    p = urlparse(url)
+    path = re.sub(r"\d+", "{N}", p.path)
+    # 마지막 path segment 가 unicode/한자 keyword 류면 placeholder
+    path = re.sub(r"/[^\x00-\x7F][^/]*\.htm$", "/{KW}.htm", path)
+    path = re.sub(r"/%[A-F0-9]{2}[^/]*\.htm", "/{KW}.htm", path)  # url-encoded
+    return f"{p.scheme}://{p.netloc}{path}"
+
+
+def _fetch_sitemap_links(base_url: str, *, max_candidates: int = 50) -> list[tuple[str, str]]:
+    """robots.txt → sitemap.xml 들 따라가서 list 후보가 될 만한 URL 수집.
+
+    필터 정책:
+      - detail-like URL 은 제외 (jobs-show-*, news-show-* 등)
+      - 같은 normalized path pattern 은 1개만 (cambojob 의 keyword 별 list 들 dedup)
+      - 최대 max_candidates 개로 cap (validate 비용 절약)
+    """
+    from urllib.parse import urljoin
+    raw: list[str] = []
+
+    def _parse_sitemap(xml_text: str, depth: int = 0) -> None:
+        if depth > 2:
+            return
+        locs = re.findall(r"<loc>([^<]+)</loc>", xml_text)
+        for loc in locs:
+            loc = loc.strip()
+            if loc.endswith(".xml") and "sitemap" in loc.lower():
+                rs = fetch(loc, timeout=10)
+                if rs.ok:
+                    _parse_sitemap(rs.text, depth + 1)
+            else:
+                raw.append(loc)
+
+    # 1) robots.txt 에서 sitemap path 추출
+    robots = fetch(urljoin(base_url, "/robots.txt"), timeout=10)
+    sitemaps: list[str] = []
+    if robots.ok:
+        for m in re.finditer(r"^\s*Sitemap:\s*(\S+)", robots.text, re.I | re.M):
+            sitemaps.append(m.group(1).strip())
+    if not sitemaps:
+        sitemaps = [urljoin(base_url, "/sitemap.xml")]
+
+    for sm in sitemaps[:3]:
+        rs = fetch(sm, timeout=10)
+        if rs.ok and "<loc>" in rs.text:
+            _parse_sitemap(rs.text)
+
+    # 필터:
+    #  - detail-like URL 제외 (jobs-show-N 등)
+    #  - url-encoded path 제외 (cambojob 의 /key/한자.htm 같은 keyword 필터 변종)
+    #  - 같은 normalized path pattern 은 1개만
+    seen_patterns: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for u in raw:
+        if _is_detail_like(u):
+            continue
+        if "%" in urlparse(u).path:
+            continue
+        pat = _normalize_url_pattern(u)
+        if pat in seen_patterns:
+            continue
+        seen_patterns.add(pat)
+        out.append((u, ""))
+        if len(out) >= max_candidates:
+            break
+    return out
+
+
 def _filter_candidates(
     links: list[tuple[str, str]],
     base_url: str,
@@ -161,6 +254,20 @@ def discover(home_url: str, *, depth1_top_n: int = 0) -> DiscoveryResult:
                 candidates = _filter_candidates(links, rd.final_url, via="home")
         except Exception:
             pass
+
+    # sitemap.xml 보강 — 홈 anchor 에 없는 채용 list URL 도 추가 후보로
+    # (cambojob 처럼 SPA landing 에 채용 메뉴 자체가 노출 안 되는 사이트 대응)
+    try:
+        sitemap_links = _fetch_sitemap_links(home.final_url)
+        if sitemap_links:
+            sitemap_cands = _filter_candidates(sitemap_links, home.final_url, via="sitemap")
+            existing_urls = {c.url for c in candidates}
+            for c in sitemap_cands:
+                if c.url not in existing_urls:
+                    candidates.append(c)
+            candidates.sort(key=lambda c: -c.score)
+    except Exception:  # noqa: BLE001
+        pass
 
     if depth1_top_n > 0 and not candidates:
         # 홈에서 못 찾으면 점수 0이지만 같은 사이트인 링크 일부를 1-depth 로 따라가본다.

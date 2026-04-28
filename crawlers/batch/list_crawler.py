@@ -20,7 +20,7 @@ from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ..extractors.list_extractor import ExtractedRow, MIN_ROWS, extract_list_multi, ListExtraction
-from ..fetchers.static import fetch as fetch_static
+from ..fetchers.static import fetch as fetch_static, make_session as _make_session
 
 
 PAGINATION_PARAMS = ["pageIndex", "currentPage", "page", "pageNum", "pageNo",
@@ -89,6 +89,81 @@ def _detect_page_param_from_html(html: str, base_url: str) -> Optional[str]:
     return max(counts.items(), key=lambda kv: kv[1])[0]
 
 
+def _detect_path_pagination_template(html: str, source_url: str) -> Optional[str]:
+    """path-segment 페이지네이션 학습.
+
+    page 1 의 anchor 들 중 텍스트가 숫자 (1~999) 인 anchor 의 href 분석.
+    href 들 사이에서 변하는 부분이 페이지 번호인 path-segment 면 그 위치를 {N}
+    placeholder 로. 학습 성공 시 URL template 반환 (e.g.
+    `https://www.cambojob.com/jobs/jobs_list/page/{N}.htm`).
+
+    cambojob 처럼 query 가 아닌 path 로 페이지네이션 하는 사이트 대응.
+    """
+    import re as _re
+    from bs4 import BeautifulSoup
+    from urllib.parse import urljoin
+
+    soup = BeautifulSoup(html, "html.parser")
+    src_p = urlparse(source_url)
+
+    # 텍스트가 숫자인 anchor 의 href + 숫자
+    pages: list[tuple[int, str]] = []
+    for a in soup.find_all("a", href=True):
+        text = a.get_text(" ", strip=True)
+        if not _re.fullmatch(r"\d{1,4}", text):
+            continue
+        n = int(text)
+        if not (1 <= n <= 999):
+            continue
+        abs_url = urljoin(source_url, a["href"])
+        p = urlparse(abs_url)
+        # 같은 host 만
+        if p.netloc != src_p.netloc:
+            continue
+        pages.append((n, abs_url))
+
+    if len(pages) < 2:
+        return None
+
+    # 두 개의 anchor URL 비교 — 다른 곳이 1군데뿐이고 그게 숫자면 그게 page 번호 위치
+    # path 를 segment 로 split, 같은 위치 segment 비교
+    n1, u1 = pages[0]
+    p1 = urlparse(u1)
+    seg1 = p1.path.split("/")
+
+    for n2, u2 in pages[1:]:
+        if n2 == n1:
+            continue
+        p2 = urlparse(u2)
+        seg2 = p2.path.split("/")
+        if len(seg1) != len(seg2):
+            continue
+        diff_idx = [i for i, (a, b) in enumerate(zip(seg1, seg2)) if a != b]
+        if len(diff_idx) != 1:
+            continue
+        i = diff_idx[0]
+        # 그 segment 가 둘 다 숫자만 포함 (e.g., '2', '3' 또는 '2.htm', 'page-2')
+        s1, s2 = seg1[i], seg2[i]
+        m1 = _re.search(r"\d+", s1)
+        m2 = _re.search(r"\d+", s2)
+        if not (m1 and m2):
+            continue
+        if int(m1.group(0)) != n1 or int(m2.group(0)) != n2:
+            continue
+        # template: i 번째 segment 에서 숫자 부분만 {N} 으로
+        templ_seg = s1[:m1.start()] + "{N}" + s1[m1.end():]
+        new_segs = list(seg1)
+        new_segs[i] = templ_seg
+        templ_path = "/".join(new_segs)
+        return urlunparse(p1._replace(path=templ_path))
+
+    return None
+
+
+def _format_path_template(template: str, page_no: int) -> str:
+    return template.replace("{N}", str(page_no))
+
+
 def _detail_prefix(url: str) -> str:
     """detail URL → path 의 마지막 segment 만 제외한 prefix.
 
@@ -154,9 +229,30 @@ def crawl_list(
                      없으면 detail_url 자체를 ID 로 사용.
     """
     if fetcher == "dynamic":
-        from ..fetchers.dynamic import fetch as _fetch
+        from ..fetchers.dynamic import fetch as _fetch_dynamic
+        def _fetch(url, **kwargs):
+            return _fetch_dynamic(url)
     else:
-        _fetch = fetch_static
+        # static 우선, 403 등 anti-scraping 차단 시 dynamic 으로 자동 fallback.
+        # 한 번이라도 dynamic 으로 성공하면 그 source 는 dynamic 모드로 stick.
+        _session = _make_session()
+        _state = {"force_dynamic": False}
+
+        def _fetch(url, **kwargs):
+            if _state["force_dynamic"]:
+                from ..fetchers.dynamic import fetch as _fetch_dynamic
+                return _fetch_dynamic(url)
+            headers = kwargs.pop("headers", None) or {}
+            headers.setdefault("Referer", source_url)
+            r = fetch_static(url, headers=headers, session=_session, **kwargs)
+            # anti-scraping 차단 (403) 또는 빈 body 면 dynamic fallback
+            if r.status == 403 or (r.ok and len(r.text) < 500):
+                from ..fetchers.dynamic import fetch as _fetch_dynamic
+                rd = _fetch_dynamic(url)
+                if rd.ok:
+                    _state["force_dynamic"] = True
+                    return rd
+            return r
 
     seen_ids = set(already_seen_ids or ())
     def _id_of(detail_url: str) -> str:
@@ -218,39 +314,46 @@ def crawl_list(
     if seen_ids and not page1_new_ids:
         return result
 
-    # ---- pagination param
-    detected = (
+    # ---- pagination 학습
+    # 우선순위: (a) source URL 의 기존 page param → (b) HTML 의 anchor query 분석
+    #         → (c) HTML 의 path-segment 패턴 분석 (cambojob 의 /page/N.htm)
+    #         → (d) candidate query param 직접 시도 (worldjob 의 pageIndex)
+    path_template: Optional[str] = None
+    page_param: Optional[str] = None
+
+    detected_param = (
         _detect_existing_page_param(source_url)
         or _detect_page_param_from_html(r.text, r.final_url)
     )
-    # 자동감지 실패 시 — page 2 시도해서 실제로 다른 결과 나오는 candidate param 학습.
-    # (worldjob 처럼 anchor 가 javascript: 라 query 추출이 안 되는 사이트 대응)
-    if not detected:
-        candidates = list(PAGINATION_PARAMS)
-        learned = None
-        for cand in candidates:
-            tu = _set_query_param(source_url, cand, "2")
-            log(f"    [learn page param] try {cand}={tu[len(source_url):]}")
-            tr = _fetch(tu)
-            if not tr.ok:
-                continue
-            tmulti = extract_list_multi(tr.text, tr.final_url)
-            same_sig_ext = [e for e in tmulti.candidates
-                            if _normalize_sig(e.container_signature) == locked_sig]
-            if not same_sig_ext:
-                continue
-            tbest = max(same_sig_ext, key=lambda e: e.count)
-            # page 1 의 external_id set 에 안 들어있는 id 개수 = 진짜 page 2
-            t_new = sum(1 for row in _filter_by_prefix(tbest.rows, prefix)
-                        if row.detail_url and _id_of(row.detail_url) not in page1_seen_ids)
-            if t_new >= MIN_ROWS:
-                learned = cand
-                log(f"    [learn page param] LEARNED: {cand}  (new rows on page 2 = {t_new})")
-                break
-        page_param = learned or "page"
+    if detected_param:
+        page_param = detected_param
     else:
-        page_param = detected
-    result.pagination_param = page_param
+        # path-segment 학습 우선 (cambojob 케이스)
+        path_template = _detect_path_pagination_template(r.text, r.final_url)
+        if path_template:
+            log(f"    [path pagination] template = {path_template}")
+        else:
+            # candidate query param 시도
+            for cand in PAGINATION_PARAMS:
+                tu = _set_query_param(source_url, cand, "2")
+                log(f"    [learn page param] try {cand}")
+                tr = _fetch(tu)
+                if not tr.ok:
+                    continue
+                tmulti = extract_list_multi(tr.text, tr.final_url)
+                same_sig_ext = [e for e in tmulti.candidates
+                                if _normalize_sig(e.container_signature) == locked_sig]
+                if not same_sig_ext:
+                    continue
+                tbest = max(same_sig_ext, key=lambda e: e.count)
+                t_new = sum(1 for row in _filter_by_prefix(tbest.rows, prefix)
+                            if row.detail_url and _id_of(row.detail_url) not in page1_seen_ids)
+                if t_new >= MIN_ROWS:
+                    page_param = cand
+                    log(f"    [learn page param] LEARNED: {cand}  (new rows = {t_new})")
+                    break
+            page_param = page_param or "page"
+    result.pagination_param = page_param or ("path:" + (path_template or ""))
 
     # 같은 페이지 내 sticky 중복은 다 적재. 하지만 다른 페이지에서 같은 ID 다시
     # 보이면 cross-page dedup 으로 skip (siemreap 처럼 사이트가 page query 무시
@@ -259,10 +362,14 @@ def crawl_list(
 
     # ---- pages 2..N (같은 시그니처 + prefix 매칭만 채택)
     for page in range(2, max_pages + 1):
-        page_url = _set_query_param(source_url, page_param, str(page))
-        log(f"    page {page} fetch...")
+        if path_template:
+            page_url = _format_path_template(path_template, page)
+        else:
+            page_url = _set_query_param(source_url, page_param, str(page))
+        log(f"    page {page} fetch... ({page_url[-60:]})")
         rp = _fetch(page_url)
         if not rp.ok:
+            log(f"    break: page {page} fetch fail (status={rp.status})")
             break
 
         multi_p = extract_list_multi(rp.text, rp.final_url)
@@ -270,11 +377,15 @@ def crawl_list(
         same_sig = [e for e in multi_p.candidates
                     if _normalize_sig(e.container_signature) == locked_sig]
         if not same_sig:
+            log(f"    break: page {page} signature {locked_sig!r} 매칭 컨테이너 없음 "
+                f"(found sigs: {[e.container_signature for e in multi_p.candidates[:3]]})")
             break
 
         page_ext = max(same_sig, key=lambda e: e.count)
         page_rows = _filter_by_prefix(page_ext.rows, prefix)
         if not page_rows:
+            log(f"    break: page {page} prefix {prefix!r} 매칭 row 없음 "
+                f"(sample row urls: {[r.detail_url[:80] for r in page_ext.rows[:3]]})")
             break
 
         # 먼저 이 페이지의 ID set 만 추출 (적재 결정 전)

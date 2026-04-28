@@ -33,18 +33,24 @@ def fetch(
     timeout: int = DEFAULT_TIMEOUT,
     impersonate: str = DEFAULT_IMPERSONATE,
     headers: Optional[dict[str, str]] = None,
+    session: Optional["cffi_requests.Session"] = None,
 ) -> FetchResult:
+    """단일 GET. session 이 주어지면 그 세션으로 호출 (cookie/session 유지).
+    cookie 가 필요한 anti-scraping 사이트 (cambojob 류) 대응.
+    """
     if cffi_requests is None:
         return FetchResult(url, 0, "", url, error="curl_cffi not installed")
 
     try:
-        resp = cffi_requests.get(
-            url,
-            timeout=timeout,
-            impersonate=impersonate,
-            headers=headers or {},
-            allow_redirects=True,
-        )
+        if session is not None:
+            resp = session.get(
+                url, timeout=timeout, headers=headers or {}, allow_redirects=True,
+            )
+        else:
+            resp = cffi_requests.get(
+                url, timeout=timeout, impersonate=impersonate,
+                headers=headers or {}, allow_redirects=True,
+            )
         return FetchResult(
             url=url,
             status=resp.status_code,
@@ -53,3 +59,10 @@ def fetch(
         )
     except Exception as e:  # noqa: BLE001
         return FetchResult(url, 0, "", url, error=f"{type(e).__name__}: {e}")
+
+
+def make_session(impersonate: str = DEFAULT_IMPERSONATE):
+    """curl_cffi Session 생성 — 같은 host 의 연속 fetch 시 cookie 유지."""
+    if cffi_requests is None:
+        return None
+    return cffi_requests.Session(impersonate=impersonate)
