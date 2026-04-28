@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# DB / data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/*.db
+data/*.csv
+data/*.json
+!data/.gitkeep
+
+# logs
+logs/
+*.log
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# claude
+.claude/
