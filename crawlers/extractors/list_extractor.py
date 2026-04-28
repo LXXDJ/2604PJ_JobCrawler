@@ -78,19 +78,21 @@ def _abs(base: str, href: str) -> Optional[str]:
         return None
     if href.startswith("javascript:"):
         # 예: javascript:goView1('E20260428002','1','1','1') →
-        #     synthetic URL = base?_jsfn=goView1&_jsid=E20260428002
+        #     synthetic URL = scheme://host/path?_jsfn=goView1&_jsid=E20260428002
         # row 마다 첫 인자가 unique 하면 list 로 인정 가능.
         # query 로 박는 이유: external_id 가 _jsid (id-suffix) 로 추출 가능.
+        # base 의 다른 query 는 의도적으로 버림 — 페이지네이션 query (page/currentPage)
+        # 가 섞이면 같은 ID 도 페이지마다 URL 이 달라져 dedupe 가 깨짐.
         m = _JS_ID_RE.match(href)
         if not m:
             return None
         fn, arg = m.group(1), m.group(2)
-        from urllib.parse import parse_qsl, urlencode
+        from urllib.parse import urlencode
         bp = urlparse(base)
-        qs = dict(parse_qsl(bp.query, keep_blank_values=True))
-        qs["_jsfn"] = fn
-        qs["_jsid"] = arg
-        return urlunparse(bp._replace(query=urlencode(qs)))
+        return urlunparse(bp._replace(
+            query=urlencode({"_jsfn": fn, "_jsid": arg}),
+            fragment="",
+        ))
     abs_url = urljoin(base, href)
     p = urlparse(abs_url)
     if p.scheme not in ("http", "https"):
@@ -99,7 +101,7 @@ def _abs(base: str, href: str) -> Optional[str]:
 
 
 def _extract_subject(row: Tag, base_url: str) -> Optional[ExtractedRow]:
-    """행 안에서 첫 번째 '제목 링크' 후보를 찾아 반환."""
+    """단일 row 만 보고 anchor 채택 — fallback 용 (longest text)."""
     best: Optional[ExtractedRow] = None
     best_len = 0
     for a in row.find_all("a", href=True):
@@ -115,6 +117,88 @@ def _extract_subject(row: Tag, base_url: str) -> Optional[ExtractedRow]:
     if best is not None:
         best.row_text = row.get_text(" ", strip=True)[:400]
     return best
+
+
+def _anchor_fingerprint(href: str) -> str:
+    """anchor 그룹화 키. busiInfoPopup vs goView1 구분.
+    같은 함수명/path 의 anchor 는 같은 fingerprint.
+    """
+    href = (href or "").strip()
+    if href.startswith("javascript:"):
+        m = re.match(r"javascript:\s*([A-Za-z_][\w$]*)", href)
+        return f"js:{m.group(1)}" if m else "js:?"
+    p = urlparse(href)
+    return f"{p.scheme}://{p.netloc}{p.path}" if p.netloc else p.path
+
+
+def _pick_subjects_for_container(
+    rows: list[Tag], base_url: str
+) -> list[Optional[ExtractedRow]]:
+    """컨테이너 내 row 들의 anchor 분포를 분석해서 row 별 detail anchor 채택.
+
+    핵심: 같은 회사의 다른 공고가 row 마다 회사 popup anchor (`busiInfoPopup`)
+    + 채용공고 anchor (`goView1`) 둘 다 갖는 worldjob 케이스 처리.
+    회사 popup 은 컨테이너 전체에서 ID 가 회사 단위 (중복 多), 채용공고 anchor 는
+    row 별 unique. 후자 우선 채택.
+
+    알고리즘:
+      1. row 별 anchor 수집 (fingerprint, url, text)
+      2. fingerprint 별 통계: 등장 row 수 + unique URL 수
+      3. 채택 기준: row 의 절반 이상에 등장 + unique URL 비율 ≥ 90%
+         (= row 마다 다른 ID, 진짜 detail anchor)
+      4. 채택 fp 의 anchor 가 row 에 있으면 그것을, 없으면 longest text fallback.
+    """
+    n_rows = len(rows)
+    # row 별 anchor 수집
+    row_anchors: list[list[tuple[str, str, str]]] = []
+    for row in rows:
+        items: list[tuple[str, str, str]] = []
+        for a in row.find_all("a", href=True):
+            url = _abs(base_url, a["href"])
+            if not url:
+                continue
+            text = a.get_text(" ", strip=True)
+            if len(text) < MIN_LINK_TEXT_LEN:
+                continue
+            items.append((_anchor_fingerprint(a["href"]), url, text))
+        row_anchors.append(items)
+
+    # fingerprint 별 통계 — 각 fp 가 컨테이너 안에서 얼마나 unique 한지
+    fp_stats: dict[str, dict] = {}
+    for items in row_anchors:
+        seen_fps: set[str] = set()
+        for fp, url, _t in items:
+            stats = fp_stats.setdefault(fp, {"urls": set(), "rows": 0})
+            stats["urls"].add(url)
+            if fp not in seen_fps:
+                stats["rows"] += 1
+                seen_fps.add(fp)
+
+    def _fp_score(fp: str) -> float:
+        """fp 의 detail-anchor 적합도. row 마다 unique URL 일수록 높음.
+        예: goView1 (row 별 unique) → 1.0
+            busiInfoPopup (회사 popup, 중복 多) → 0.6 정도
+        """
+        st = fp_stats.get(fp)
+        if not st or st["rows"] == 0:
+            return -1.0
+        return len(st["urls"]) / st["rows"]
+
+    out: list[Optional[ExtractedRow]] = []
+    for ri, items in enumerate(row_anchors):
+        chosen: Optional[ExtractedRow] = None
+        chosen_score = -1.0
+        for fp, url, text in items:
+            sc = _fp_score(fp)
+            # 동점이면 longer text 우선
+            if sc > chosen_score or (sc == chosen_score and chosen is not None and
+                                     len(text) > len(chosen.title)):
+                chosen = ExtractedRow(detail_url=url, title=text[:200])
+                chosen_score = sc
+        if chosen is not None:
+            chosen.row_text = rows[ri].get_text(" ", strip=True)[:400]
+        out.append(chosen)
+    return out
 
 
 def _children_signature(el: Tag) -> str:
@@ -202,7 +286,9 @@ def extract_list_multi(html: str, base_url: str) -> ListExtractionMulti:
 
     out: list[ListExtraction] = []
     for sig, rows in raw:
-        extracted = [r for r in (_extract_subject(row, base_url) for row in rows) if r]
+        # 컨테이너 단위 분석 — row 별 unique anchor (busiInfoPopup 같은 회사 popup
+        # 보다 goView1 같은 detail anchor 우선) 채택
+        extracted = [r for r in _pick_subjects_for_container(rows, base_url) if r]
         if not extracted:
             continue
         out.append(ListExtraction(container_signature=sig, rows=extracted))

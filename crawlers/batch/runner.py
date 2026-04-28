@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from ..extractors.external_id import extract_external_id
 from ..infra.db import get_conn
@@ -103,7 +103,14 @@ def _existing_external_ids(site_id: str) -> set[str]:
         }
 
 
-def run_site(site_id: str, *, fetch_details: bool = True) -> SiteRunReport:
+def run_site(
+    site_id: str,
+    *,
+    fetch_details: bool = True,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> SiteRunReport:
+    log = progress_cb or (lambda _msg: None)
+
     site = get_site(site_id)
     rep = SiteRunReport(site_id=site_id, site_name=(site or {}).get("name"))
     if not site:
@@ -125,12 +132,13 @@ def run_site(site_id: str, *, fetch_details: bool = True) -> SiteRunReport:
     any_source_ok = False
     error_msgs: list[str] = []
 
-    for src in sources:
+    for si, src in enumerate(sources, 1):
         url = src.get("url")
         if not url:
             continue
         rep.sources_crawled += 1
         fetcher = src.get("fetcher", "static")
+        log(f"  [{site_id}] source {si}/{len(sources)} ({fetcher}) {url[:90]}")
 
         if fetcher == "api" and src.get("api_schema"):
             from ..extractors.api_schema import ApiSchema
@@ -140,26 +148,33 @@ def run_site(site_id: str, *, fetch_details: bool = True) -> SiteRunReport:
             if not api_res.ok:
                 error_msgs.append(f"{url}: {api_res.error}")
                 rep.notes.append(f"api fail: {url} ({api_res.error})")
+                log(f"  [{site_id}]   api fail: {api_res.error}")
                 continue
             any_source_ok = True
             rep.rows_seen += len(api_res.rows)
             rows_to_process = api_res.rows
+            log(f"  [{site_id}]   api {api_res.pages_crawled} pages, {len(api_res.rows)} rows")
         else:
             listing = crawl_list(
                 url,
                 fetcher=fetcher,
                 already_seen_ids=already_seen,
                 id_extractor=extract_external_id,
+                progress_cb=log,
             )
             if not listing.ok:
                 error_msgs.append(f"{url}: {listing.error}")
                 rep.notes.append(f"list fail: {url} ({listing.error})")
+                log(f"  [{site_id}]   list fail: {listing.error}")
                 continue
             any_source_ok = True
             rep.rows_seen += len(listing.rows)
             rows_to_process = listing.rows
+            log(f"  [{site_id}]   list {listing.pages_crawled} pages, {len(listing.rows)} rows")
 
-        for row in rows_to_process:
+        # 매 N 행마다 crawl_runs 진행 갱신 (대시보드 라이브 진행)
+        progress_step = 25
+        for j, row in enumerate(rows_to_process, 1):
             ext_id = extract_external_id(row.detail_url)
 
             detail = None
@@ -188,6 +203,10 @@ def run_site(site_id: str, *, fetch_details: bool = True) -> SiteRunReport:
                 rep.updated += 1
             else:
                 rep.unchanged += 1
+
+            if j % progress_step == 0:
+                log(f"  [{site_id}]   ... {j}/{len(rows_to_process)} processed "
+                    f"(+{rep.inserted} ~{rep.updated})")
 
     rep.success = any_source_ok
 

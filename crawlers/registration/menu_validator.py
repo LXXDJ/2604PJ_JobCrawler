@@ -206,46 +206,53 @@ def validate(url: str, *, timeout: int = 20) -> ValidationResult:
         from ..extractors.api_schema import detect_schema, get_at_path
         rd = fetch_dynamic(url, capture_api=True)
         if rd.ok:
-            ed = _pick_passing(rd.text, rd.final_url) or extract_list(rd.text, rd.final_url)
-            if _passes_thresholds(ed):
+            ed_dyn = _pick_passing(rd.text, rd.final_url) or extract_list(rd.text, rd.final_url)
+            api_calls = getattr(rd, "api_calls", None) or []
+            xhr_html = getattr(rd, "xhr_html", None) or []
+
+            # 우선순위 1) JSON API — 자동 페이지네이션 가능 + 가장 빠름
+            sample_url = ed_dyn.rows[0].detail_url if ed_dyn and ed_dyn.rows else None
+            schema = detect_schema(api_calls, sample_detail_url=sample_url,
+                                   desired_page_size=50)
+            if schema:
+                fetcher_used = "api"
+                api_schema_dict = schema.to_dict()
+                ext = ed_dyn  # API 가 따로 fetch 하므로 page 1 결과로 OK
                 r = rd
-                ext = ed
-                fetcher_used = "dynamic"
+                for call in api_calls:
+                    if call.get("url", "").startswith(schema.base_url):
+                        tot = get_at_path(call.get("data") or {}, "data.totalCount") \
+                              or (call.get("data") or {}).get("totalCount")
+                        if tot is not None:
+                            try:
+                                total_count = int(tot)
+                            except (ValueError, TypeError):
+                                pass
+                            break
             else:
-                # 페이지가 직접 list 를 렌더하지 않고 AJAX HTML fragment 로 로드하는 케이스
-                # (예: worldjob.or.kr) — XHR 응답 HTML 들을 list 로 검증해보고 통과하면
-                # 그 endpoint 를 source URL 로 채택.
-                xhr_html = getattr(rd, "xhr_html", None) or []
+                # 우선순위 2) XHR HTML endpoint — 정적 GET 으로 같은 list 받을 수 있으면
+                # 매 페이지 Playwright 띄우는 비용 회피
+                best_xhr = None
                 for x in xhr_html:
                     cand = _pick_passing(x["text"], x["url"])
-                    if cand is not None:
-                        from ..fetchers.static import FetchResult
-                        r = FetchResult(url=x["url"], status=x["status"],
-                                         text=x["text"], final_url=x["url"])
-                        ext = cand
-                        fetcher_used = "static"  # ajax endpoint 는 정적 fetch 가능
-                        url = x["url"]  # source URL 자체를 ajax endpoint 로 갱신
-                        break
+                    if cand is None:
+                        continue
+                    if best_xhr is None or cand.count > best_xhr[0].count:
+                        best_xhr = (cand, x)
 
-                # API 자동 발견 시도: Network 트래픽에서 list 응답 endpoint 찾기
-                api_calls = getattr(rd, "api_calls", None) or []
-                sample_url = ed.rows[0].detail_url if ed.rows else None
-                schema = detect_schema(api_calls, sample_detail_url=sample_url,
-                                        desired_page_size=50)
-                if schema:
-                    fetcher_used = "api"
-                    api_schema_dict = schema.to_dict()
-                    # totalCount 추출
-                    for call in api_calls:
-                        if call.get("url", "").startswith(schema.base_url):
-                            tot = get_at_path(call.get("data") or {}, "data.totalCount") \
-                                  or (call.get("data") or {}).get("totalCount")
-                            if tot is not None:
-                                try:
-                                    total_count = int(tot)
-                                except (ValueError, TypeError):
-                                    pass
-                                break
+                if best_xhr is not None:
+                    cand, x = best_xhr
+                    from ..fetchers.static import FetchResult
+                    r = FetchResult(url=x["url"], status=x["status"],
+                                     text=x["text"], final_url=x["url"])
+                    ext = cand
+                    fetcher_used = "static"
+                    url = x["url"]
+                elif _passes_thresholds(ed_dyn):
+                    # 우선순위 3) dynamic 페이지 그대로 — 느리지만 작동
+                    r = rd
+                    ext = ed_dyn
+                    fetcher_used = "dynamic"
 
     if not r.ok or ext is None:
         return ValidationResult(

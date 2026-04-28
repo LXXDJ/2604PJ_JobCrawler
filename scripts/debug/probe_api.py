@@ -12,7 +12,8 @@ def main(url: str):
     r = fetch_dynamic(url, capture_api=True)
     print(f"ok={r.ok} status={r.status} final={r.final_url}")
     api_calls = getattr(r, "api_calls", None) or []
-    print(f"API calls captured: {len(api_calls)}")
+    xhr_html = getattr(r, "xhr_html", None) or []
+    print(f"API calls (JSON): {len(api_calls)}")
     for c in api_calls:
         data = c.get("data")
         kind = type(data).__name__
@@ -22,6 +23,9 @@ def main(url: str):
         elif isinstance(data, list):
             size = f"items={len(data)}"
         print(f"  [{c.get('status')}] {c.get('url')}\n    type={kind} {size}")
+    print(f"\nXHR HTML responses: {len(xhr_html)}")
+    for x in xhr_html:
+        print(f"  [{x.get('status')}] {x.get('url')[:120]}  (text len={len(x.get('text') or '')})")
 
 
 if __name__ == "__main__":

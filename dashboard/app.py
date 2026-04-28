@@ -27,6 +27,19 @@ init_db()
 
 # ---------- Helpers ----------
 
+# SQLite datetime('now') 는 UTC. dashboard 표시는 KST (UTC+9).
+_KST_COLS = ("started_at", "ended_at", "first_seen_at", "last_seen_at",
+             "closed_at", "last_success_at", "last_attempt_at")
+
+
+def _to_kst(df: pd.DataFrame) -> pd.DataFrame:
+    """df 의 알려진 시간 컬럼들을 UTC → KST 문자열로 변환."""
+    for c in _KST_COLS:
+        if c in df.columns:
+            ts = pd.to_datetime(df[c], errors="coerce", utc=True)
+            df[c] = ts.dt.tz_convert("Asia/Seoul").dt.strftime("%Y-%m-%d %H:%M:%S").fillna("")
+    return df
+
 def _df_sites() -> pd.DataFrame:
     sites = list_sites()
     if not sites:
@@ -54,7 +67,7 @@ def _df_sites() -> pd.DataFrame:
             "last_attempt_at": s["last_attempt_at"] or "",
             "status_reason": s["status_reason"] or "",
         })
-    return pd.DataFrame(rows)
+    return _to_kst(pd.DataFrame(rows))
 
 
 def _df_jobs(site_id: str | None = None, limit: int = 200) -> pd.DataFrame:
@@ -71,7 +84,7 @@ def _df_jobs(site_id: str | None = None, limit: int = 200) -> pd.DataFrame:
     params = (*params, limit)
     with get_conn() as conn:
         rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
-    return pd.DataFrame(rows)
+    return _to_kst(pd.DataFrame(rows))
 
 
 def _df_runs(site_id: str | None = None, limit: int = 50) -> pd.DataFrame:
@@ -91,7 +104,7 @@ def _df_runs(site_id: str | None = None, limit: int = 50) -> pd.DataFrame:
     params = (*params, limit)
     with get_conn() as conn:
         rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
-    return pd.DataFrame(rows)
+    return _to_kst(pd.DataFrame(rows))
 
 
 def _site_sources(site_id: str) -> list[dict]:
@@ -150,6 +163,10 @@ c4.metric("dead", status_counts.get("dead", 0))
 with get_conn() as conn:
     total_jobs = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
 st.metric("jobs total", total_jobs)
+st.caption(
+    "💡 배치 실시간 진행 보려면 CMD 에서 직접 실행하거나, "
+    "스케줄 배치는 `tail -f logs/hourly_batch.log`"
+)
 
 st.divider()
 

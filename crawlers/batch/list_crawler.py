@@ -19,12 +19,12 @@ from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from ..extractors.list_extractor import ExtractedRow, extract_list_multi, ListExtraction
+from ..extractors.list_extractor import ExtractedRow, MIN_ROWS, extract_list_multi, ListExtraction
 from ..fetchers.static import fetch as fetch_static
 
 
-PAGINATION_PARAMS = ["page", "p", "pageNum", "pageNo", "pageIndex",
-                     "cpage", "currentPage", "startPage"]
+PAGINATION_PARAMS = ["pageIndex", "currentPage", "page", "pageNum", "pageNo",
+                     "cpage", "startPage", "p"]
 MAX_PAGES = 200                   # 안전장치 (페이지 끝나면 자동 break)
 NEW_ROWS_BREAK_THRESHOLD = 0.20   # 새 row 비율이 이 미만이면 페이지 끝으로 간주
 CONSECUTIVE_LOW_BREAK = 2         # 연속 N 페이지 새 row 거의 없으면 break
@@ -144,6 +144,7 @@ def crawl_list(
     fetcher: str = "static",
     already_seen_ids: set[str] | None = None,
     id_extractor=None,
+    progress_cb=None,
 ) -> CrawlListResult:
     """페이지네이션 따라가며 신규 row 만 수집 (증분).
 
@@ -160,10 +161,12 @@ def crawl_list(
     seen_ids = set(already_seen_ids or ())
     def _id_of(detail_url: str) -> str:
         return id_extractor(detail_url) if id_extractor else detail_url
+    log = progress_cb or (lambda _msg: None)
 
     result = CrawlListResult(source_url=source_url)
 
     # ---- page 1
+    log(f"    page 1 fetch ({fetcher})...")
     r = _fetch(source_url)
     if not r.ok:
         result.error = r.error or f"HTTP {r.status}"
@@ -208,21 +211,48 @@ def crawl_list(
         result.error = "page 1 rows did not match learned prefix"
         return result
 
+    log(f"    page 1: total={page1_total} new={page1_new}")
     # 페이지 1 에 새 ID 가 0 이면 더 갈 필요 없음 (사이트 정렬이 최신순이라는 가정)
     if seen_ids and page1_new == 0:
         return result
 
     # ---- pagination param
-    page_param = (
+    detected = (
         _detect_existing_page_param(source_url)
         or _detect_page_param_from_html(r.text, r.final_url)
-        or "page"
     )
+    # 자동감지 실패 시 — page 2 시도해서 실제로 다른 결과 나오는 candidate param 학습.
+    # (worldjob 처럼 anchor 가 javascript: 라 query 추출이 안 되는 사이트 대응)
+    if not detected:
+        candidates = list(PAGINATION_PARAMS)
+        learned = None
+        for cand in candidates:
+            tu = _set_query_param(source_url, cand, "2")
+            log(f"    [learn page param] try {cand}={tu[len(source_url):]}")
+            tr = _fetch(tu)
+            if not tr.ok:
+                continue
+            tmulti = extract_list_multi(tr.text, tr.final_url)
+            same_sig_ext = [e for e in tmulti.candidates
+                            if _normalize_sig(e.container_signature) == locked_sig]
+            if not same_sig_ext:
+                continue
+            tbest = max(same_sig_ext, key=lambda e: e.count)
+            t_new = sum(1 for row in _filter_by_prefix(tbest.rows, prefix)
+                        if row.detail_url and row.detail_url not in seen_urls)
+            if t_new >= MIN_ROWS:
+                learned = cand
+                log(f"    [learn page param] LEARNED: {cand}  (new rows on page 2 = {t_new})")
+                break
+        page_param = learned or "page"
+    else:
+        page_param = detected
     result.pagination_param = page_param
 
     # ---- pages 2..N (같은 시그니처 + prefix 매칭만 채택)
     for page in range(2, max_pages + 1):
         page_url = _set_query_param(source_url, page_param, str(page))
+        log(f"    page {page} fetch...")
         rp = _fetch(page_url)
         if not rp.ok:
             break
@@ -252,12 +282,15 @@ def crawl_list(
             page_new += 1
 
         result.pages_crawled = page
+        log(f"    page {page}: total={page_total} new={page_new}")
 
         if page_total == 0:
             # 같은 row 가 이전 페이지와 완전히 동일 → 페이지네이션 끝
+            log(f"    break: page {page} 모든 URL 이 이전 페이지와 동일")
             break
         if seen_ids and page_new == 0:
             # 모든 row 가 already-seen → 더 가도 새 글 없음 (증분 종료)
+            log(f"    break: page {page} 모두 already_seen (증분 종료)")
             break
 
     return result

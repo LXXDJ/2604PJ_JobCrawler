@@ -76,6 +76,13 @@ def main() -> None:
                     help="슬랙 알림 보내지 않음")
     args = ap.parse_args()
 
+    # 시작 직전 — 좀비 run 자동 청소 (이전 배치가 강제 종료되어 ended_at NULL 로 남은 것)
+    from scripts.db.close_orphan_runs import main as _close_orphans
+    try:
+        _close_orphans(threshold_minutes=30)
+    except Exception as e:  # noqa: BLE001
+        print(f"[warn] close_orphan_runs failed: {e}", flush=True)
+
     started = time.time()
     rep = run_batch(
         site_ids=args.site,

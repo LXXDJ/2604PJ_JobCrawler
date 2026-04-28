@@ -88,9 +88,10 @@ def fetch(
 
             def _on_response(resp):
                 try:
-                    if resp.request.resource_type not in ("xhr", "fetch"):
-                        return
-                    if resp.request.method != "GET":
+                    rt = resp.request.resource_type
+                    # xhr/fetch 만 — main document/css/img 등은 무시
+                    # GET / POST 둘 다 수용 (form submit 형 AJAX 도 잡기 위해)
+                    if rt not in ("xhr", "fetch"):
                         return
                     ct = (resp.headers.get("content-type") or "").lower()
                     body = resp.body()
