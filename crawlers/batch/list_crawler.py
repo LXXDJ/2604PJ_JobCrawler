@@ -25,7 +25,8 @@ from ..fetchers.static import fetch as fetch_static, make_session as _make_sessi
 
 PAGINATION_PARAMS = ["pageIndex", "currentPage", "page", "pageNum", "pageNo",
                      "cpage", "startPage", "p"]
-MAX_PAGES = 200                   # 안전장치 (페이지 끝나면 자동 break)
+MAX_PAGES = 1000                  # 안전장치 (페이지 끝나면 자동 break — 정상 사이트는
+                                  # break 조건으로 조기 종료. 대형 사이트 cap 만 의미)
 NEW_ROWS_BREAK_THRESHOLD = 0.20   # 새 row 비율이 이 미만이면 페이지 끝으로 간주
 CONSECUTIVE_LOW_BREAK = 2         # 연속 N 페이지 새 row 거의 없으면 break
 
@@ -445,5 +446,8 @@ def crawl_list(
         session_seen_ids.update(page_ids)
         result.pages_crawled = page
         log(f"    page {page}: total={page_total} added={page_inserted}")
+    else:
+        # for-loop 가 break 없이 끝남 = MAX_PAGES cap 도달
+        log(f"    [warn] MAX_PAGES={max_pages} cap 도달 — 더 가져올 row 가 있을 수 있음")
 
     return result

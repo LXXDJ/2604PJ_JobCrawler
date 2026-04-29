@@ -25,6 +25,9 @@ MIN_SUBJ_RATIO = 0.5
 MIN_JOB_TITLE_RATIO = 0.3   # row 제목 중 채용 키워드 1개 이상 hit 비율
 MIN_JOB_TITLE_COUNT = 2     # 비율 미달이어도 절대 갯수 N 이상이면 통과
                              # (광고 도배된 게시판이라도 실제 공고 N개 있으면 의미 있음)
+MIN_JOB_TITLE_HARD_FLOOR = 0.10  # 어떤 경우든 ratio 가 이 미만이면 reject —
+                                  # peoplenjob /jobs/biz (44 카테고리, ratio=0.05)
+                                  # 처럼 row 가 많은데 키워드 거의 없는 카테고리 nav 차단
 # 진짜 채용 list 는 detail URL 들이 같은 path + ID 만 다름 (unique_path_ratio ≈ 0).
 # 메뉴 list (절차안내 등) 는 path 자체가 모두 달라 ≈ 1.0.
 # 이 임계 미만이어야 list 로 인정.
@@ -174,7 +177,58 @@ def _unique_path_ratio(rows) -> float:
     return len(set(paths)) / len(paths)
 
 
-def _passes_thresholds(ext: ListExtraction | None) -> bool:
+def _detail_paths_redirect_to_parent(rows, source_url: str) -> float:
+    """row 의 detail URL path 가 source URL 의 parent path 와 같은 비율.
+    예: source=/jobs/work → parent=/jobs.
+        rows[i].detail_url path = /jobs?type=work&... → match.
+    이 비율이 높으면 source 가 카테고리 nav 페이지이고 row 들은 list 의
+    filter URL 로 분기 — 진짜 채용 list 아님.
+    """
+    from urllib.parse import urlparse
+    src = urlparse(source_url)
+    src_path = src.path.rstrip("/")
+    if "/" not in src_path:
+        return 0.0
+    parent = "/".join(src_path.split("/")[:-1]) or "/"
+    if not rows:
+        return 0.0
+    n = 0
+    for r in rows:
+        if not r.detail_url:
+            continue
+        d_path = urlparse(r.detail_url).path.rstrip("/") or "/"
+        if d_path == parent:
+            n += 1
+    return n / len(rows)
+
+
+MAX_PARENT_REDIRECT_RATIO = 0.7  # 70% 이상이 source 의 parent 로 redirect 면 nav
+MAX_EXTERNAL_HOST_RATIO = 0.5     # 50% 이상이 외부 도메인이면 회사/협회 디렉토리 (peoplenjob/careers/group)
+
+
+def _external_host_ratio(rows, source_url: str) -> float:
+    """detail URL host 가 source host 와 다른 row 비율."""
+    from urllib.parse import urlparse
+    src_host = urlparse(source_url).netloc.lower()
+    if not src_host or not rows:
+        return 0.0
+    n_total = 0
+    n_ext = 0
+    for r in rows:
+        if not r.detail_url:
+            continue
+        d_host = urlparse(r.detail_url).netloc.lower()
+        if not d_host:
+            continue
+        n_total += 1
+        if d_host != src_host:
+            n_ext += 1
+    if n_total == 0:
+        return 0.0
+    return n_ext / n_total
+
+
+def _passes_thresholds(ext: ListExtraction | None, source_url: str | None = None) -> bool:
     if ext is None or ext.count < MIN_ROWS:
         return False
     _, subj_ratio = _eval_extraction(ext)  # (n_total, subject_link_ratio)
@@ -182,16 +236,22 @@ def _passes_thresholds(ext: ListExtraction | None) -> bool:
         return False
     title_ratio = _job_title_ratio(ext.rows)
     title_count = _job_title_count(ext.rows)
+    if title_ratio < MIN_JOB_TITLE_HARD_FLOOR:
+        return False
     if title_ratio < MIN_JOB_TITLE_RATIO and title_count < MIN_JOB_TITLE_COUNT:
         return False
     if _unique_path_ratio(ext.rows) > MAX_UNIQUE_PATH_RATIO:
         return False
     if _event_ratio(ext.rows) > MAX_EVENT_RATIO:
         return False
+    if source_url and _detail_paths_redirect_to_parent(ext.rows, source_url) > MAX_PARENT_REDIRECT_RATIO:
+        return False
+    if source_url and _external_host_ratio(ext.rows, source_url) > MAX_EXTERNAL_HOST_RATIO:
+        return False
     return True
 
 
-def _pick_passing(html: str, base_url: str) -> ListExtraction | None:
+def _pick_passing(html: str, base_url: str, source_url: str | None = None) -> ListExtraction | None:
     """모든 list 후보 컨테이너 중 임계 통과하는 것 중 가장 큰 것 선택.
     통과하는 게 없으면 None.
 
@@ -200,7 +260,7 @@ def _pick_passing(html: str, base_url: str) -> ListExtraction | None:
     실제 채용 컨테이너가 더 작아도 임계 통과하면 그걸 채택해야 함.
     """
     multi = extract_list_multi(html, base_url)
-    passing = [e for e in multi.candidates if _passes_thresholds(e)]
+    passing = [e for e in multi.candidates if _passes_thresholds(e, source_url)]
     if not passing:
         return None
     return max(passing, key=lambda e: e.count)
@@ -213,18 +273,18 @@ def validate(url: str, *, timeout: int = 20) -> ValidationResult:
     api_schema_dict = None
     total_count = None
     if r.ok:
-        passed = _pick_passing(r.text, r.final_url)
+        passed = _pick_passing(r.text, r.final_url, source_url=url)
         ext = passed or extract_list(r.text, r.final_url)
     else:
         ext = None
 
     # 정적 결과가 검증을 통과 못 하면 동적 fallback (Network 캡처 켜기)
-    if not _passes_thresholds(ext):
+    if not _passes_thresholds(ext, url):
         from ..fetchers.dynamic import fetch as fetch_dynamic
         from ..extractors.api_schema import detect_schema, get_at_path
         rd = fetch_dynamic(url, capture_api=True)
         if rd.ok:
-            ed_dyn = _pick_passing(rd.text, rd.final_url) or extract_list(rd.text, rd.final_url)
+            ed_dyn = _pick_passing(rd.text, rd.final_url, source_url=url) or extract_list(rd.text, rd.final_url)
             api_calls = getattr(rd, "api_calls", None) or []
             xhr_html = getattr(rd, "xhr_html", None) or []
 
@@ -252,7 +312,7 @@ def validate(url: str, *, timeout: int = 20) -> ValidationResult:
                 # 매 페이지 Playwright 띄우는 비용 회피
                 best_xhr = None
                 for x in xhr_html:
-                    cand = _pick_passing(x["text"], x["url"])
+                    cand = _pick_passing(x["text"], x["url"], source_url=x["url"])
                     if cand is None:
                         continue
                     if best_xhr is None or cand.count > best_xhr[0].count:
@@ -266,7 +326,7 @@ def validate(url: str, *, timeout: int = 20) -> ValidationResult:
                     ext = cand
                     fetcher_used = "static"
                     url = x["url"]
-                elif _passes_thresholds(ed_dyn):
+                elif _passes_thresholds(ed_dyn, url):
                     # 우선순위 3) dynamic 페이지 그대로 — 느리지만 작동
                     r = rd
                     ext = ed_dyn
@@ -297,6 +357,10 @@ def validate(url: str, *, timeout: int = 20) -> ValidationResult:
     if ratio < MIN_SUBJ_RATIO:
         return ValidationResult(**base, ok=False,
                                 reason=f"subject_link_ratio {ratio:.2f} < {MIN_SUBJ_RATIO}")
+    if title_ratio < MIN_JOB_TITLE_HARD_FLOOR:
+        return ValidationResult(**base, ok=False,
+                                reason=(f"job_title_ratio {title_ratio:.2f} < hard floor "
+                                        f"{MIN_JOB_TITLE_HARD_FLOOR} (카테고리 nav 의심)"))
     title_count = _job_title_count(ext.rows)
     if title_ratio < MIN_JOB_TITLE_RATIO and title_count < MIN_JOB_TITLE_COUNT:
         return ValidationResult(**base, ok=False,
@@ -312,5 +376,15 @@ def validate(url: str, *, timeout: int = 20) -> ValidationResult:
         return ValidationResult(**base, ok=False,
                                 reason=(f"event_ratio {er:.2f} > {MAX_EVENT_RATIO} "
                                         "(설명회/세미나/강의 등 이벤트 list)"))
+    prr = _detail_paths_redirect_to_parent(ext.rows, url)
+    if prr > MAX_PARENT_REDIRECT_RATIO:
+        return ValidationResult(**base, ok=False,
+                                reason=(f"parent_redirect_ratio {prr:.2f} > {MAX_PARENT_REDIRECT_RATIO} "
+                                        "(detail URL 들이 source 의 parent 로 redirect — 카테고리 nav)"))
+    ehr = _external_host_ratio(ext.rows, url)
+    if ehr > MAX_EXTERNAL_HOST_RATIO:
+        return ValidationResult(**base, ok=False,
+                                reason=(f"external_host_ratio {ehr:.2f} > {MAX_EXTERNAL_HOST_RATIO} "
+                                        "(detail URL host 외부 도메인 — 협회/디렉토리 페이지)"))
 
     return ValidationResult(**base, ok=True)
