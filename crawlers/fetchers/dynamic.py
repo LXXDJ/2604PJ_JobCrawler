@@ -82,6 +82,13 @@ def fetch(
     try:
         ctx = browser.new_context(user_agent=user_agent or _USER_AGENT)
         page = ctx.new_page()
+        # stealth — anti-bot 감지 우회 (navigator.webdriver, canvas fingerprint 등 위장).
+        # cambojob 같이 강한 anti-scraping 사이트 통과 가능성 ↑.
+        try:
+            from playwright_stealth import Stealth
+            Stealth().apply_stealth_sync(page)
+        except Exception:  # noqa: BLE001
+            pass
 
         if capture_api:
             import json as _json

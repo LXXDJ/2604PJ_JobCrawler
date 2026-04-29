@@ -241,18 +241,21 @@ def crawl_list(
         def _fetch(url, **kwargs):
             if _state["force_dynamic"]:
                 from ..fetchers.dynamic import fetch as _fetch_dynamic
-                rd = _fetch_dynamic(url)
-                return rd
+                return _fetch_dynamic(url)
             headers = kwargs.pop("headers", None) or {}
             headers.setdefault("Referer", source_url)
             r = fetch_static(url, headers=headers, session=_session, **kwargs)
             if r.status == 403 or (r.ok and len(r.text) < 500):
-                # anti-scraping 차단 → dynamic fallback
+                # anti-scraping 차단 → 30s sleep 후 dynamic fallback
+                # (즉시 dynamic 호출 시 사이트가 같은 IP 의 즉시 패턴을 감지하고
+                #  decoy HTML 반환하는 케이스 — cambojob 류 — 대응)
                 if log:
                     try:
-                        log(f"    [fallback] static status={r.status} → dynamic 시도")
+                        log(f"    [fallback] static status={r.status} → sleep 30s 후 dynamic")
                     except Exception:  # noqa: BLE001
                         pass
+                import time as _t
+                _t.sleep(30)
                 from ..fetchers.dynamic import fetch as _fetch_dynamic
                 rd = _fetch_dynamic(url)
                 if log:
@@ -373,15 +376,23 @@ def crawl_list(
 
     # ---- pages 2..N (같은 시그니처 + prefix 매칭만 채택)
     import time as _time
+    page_sleep = 0.5     # 정상 사이트는 fast
     for page in range(2, max_pages + 1):
         if path_template:
             page_url = _format_path_template(path_template, page)
         else:
             page_url = _set_query_param(source_url, page_param, str(page))
-        # 페이지 간 0.5s 휴식 — anti-scraping rate-limit 우회 (사람 행동 시뮬)
-        _time.sleep(0.5)
+        _time.sleep(page_sleep)
         log(f"    page {page} fetch... ({page_url[-60:]})")
         rp = _fetch(page_url)
+
+        # 403 받았으면 backoff 늘리고 1회 retry — anti-scraping rate-limit 사이트 대응
+        if rp.status == 403 and page_sleep < 30:
+            page_sleep = 30
+            log(f"    [backoff] 403 받음 → sleep {page_sleep}s 후 retry")
+            _time.sleep(page_sleep)
+            rp = _fetch(page_url)
+
         if not rp.ok:
             log(f"    break: page {page} fetch fail (status={rp.status})")
             break
