@@ -241,14 +241,25 @@ def crawl_list(
         def _fetch(url, **kwargs):
             if _state["force_dynamic"]:
                 from ..fetchers.dynamic import fetch as _fetch_dynamic
-                return _fetch_dynamic(url)
+                rd = _fetch_dynamic(url)
+                return rd
             headers = kwargs.pop("headers", None) or {}
             headers.setdefault("Referer", source_url)
             r = fetch_static(url, headers=headers, session=_session, **kwargs)
-            # anti-scraping 차단 (403) 또는 빈 body 면 dynamic fallback
             if r.status == 403 or (r.ok and len(r.text) < 500):
+                # anti-scraping 차단 → dynamic fallback
+                if log:
+                    try:
+                        log(f"    [fallback] static status={r.status} → dynamic 시도")
+                    except Exception:  # noqa: BLE001
+                        pass
                 from ..fetchers.dynamic import fetch as _fetch_dynamic
                 rd = _fetch_dynamic(url)
+                if log:
+                    try:
+                        log(f"    [fallback] dynamic ok={rd.ok} status={rd.status} len={len(rd.text or '')}")
+                    except Exception:
+                        pass
                 if rd.ok:
                     _state["force_dynamic"] = True
                     return rd
@@ -361,11 +372,14 @@ def crawl_list(
     session_seen_ids: set[str] = set(page1_seen_ids)
 
     # ---- pages 2..N (같은 시그니처 + prefix 매칭만 채택)
+    import time as _time
     for page in range(2, max_pages + 1):
         if path_template:
             page_url = _format_path_template(path_template, page)
         else:
             page_url = _set_query_param(source_url, page_param, str(page))
+        # 페이지 간 0.5s 휴식 — anti-scraping rate-limit 우회 (사람 행동 시뮬)
+        _time.sleep(0.5)
         log(f"    page {page} fetch... ({page_url[-60:]})")
         rp = _fetch(page_url)
         if not rp.ok:
@@ -396,7 +410,8 @@ def crawl_list(
         # break 조건: 이 페이지의 모든 ID 가 이전 페이지에서 이미 봤음
         # → 사이트가 page query 무시하거나 페이지네이션 끝
         if page_ids and page_ids.issubset(session_seen_ids):
-            log(f"    break: page {page} 모든 ID 가 이미 봤음 ({len(page_ids)} IDs, pagination 끝/무작동)")
+            sample_ids = sorted(page_ids)[:5]
+            log(f"    break: page {page} 모든 ID 가 이미 봤음 ({len(page_ids)} IDs, sample={sample_ids})")
             break
 
         # 새 ID 가 일부라도 있으면 이 페이지의 모든 raw row 적재 (sticky 포함)
