@@ -27,3 +27,15 @@ _load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+
+
+# Proxy 풀 — anti-scraping 강한 사이트 (슈퍼루키 등) 의 source 가 use_proxy=True 면 회전 사용.
+# 형식: ["http://user:pass@host:port", ...]
+# .env 에 PROXIES="url1,url2,url3" 형태로 콤마 구분 리스트 허용.
+def _load_proxies() -> list[str]:
+    raw = os.getenv("PROXIES", "").strip()
+    if not raw:
+        return []
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+PROXIES = _load_proxies()

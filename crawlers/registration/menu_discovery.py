@@ -237,6 +237,15 @@ def discover(home_url: str, *, depth1_top_n: int = 0) -> DiscoveryResult:
     로 fallback. EPS, SPA 홈처럼 JS 가 메뉴를 렌더하는 사이트 대응.
     """
     home: FetchResult = fetch(home_url)
+    # static 차단 시 proxy 풀로 fallback (슈퍼루키 류 anti-scraping)
+    if not home.ok or home.status == 403:
+        from ..infra.config import PROXIES
+        if PROXIES:
+            for p in PROXIES:
+                hp = fetch(home_url, proxy=p)
+                if hp.ok:
+                    home = hp
+                    break
     if not home.ok:
         return DiscoveryResult(home_url, home.final_url, error=home.error or f"HTTP {home.status}")
 

@@ -123,6 +123,7 @@ class ValidationResult:
     fetcher: str = "static"   # 'static' | 'dynamic' | 'api'
     api_schema: Optional[dict] = None  # fetcher='api' 일 때 schema dict
     total_count: Optional[int] = None  # API 가 알려주는 전체 공고 수 (있으면)
+    use_proxy: bool = False  # anti-scraping 차단 시 proxy 풀로만 fetch 가능
     error: Optional[str] = None
     reason: Optional[str] = None
 
@@ -153,25 +154,34 @@ def _eval_extraction(ext: ListExtraction) -> tuple[int, float]:
 def _unique_path_ratio(rows) -> float:
     """detail URL 들의 path 패턴 고유성 비율. 진짜 list 는 ≈0, 메뉴 list 는 ≈1.
 
-    path 안의 숫자/ID 부분을 placeholder 로 normalize 후 비교 — cambojob 의
-    `/jobs/jobs-show-22291-.htm`, `/jobs/jobs-show-22287-.htm` 처럼 path 에
-    ID 가 박힌 케이스도 normalize 하면 같은 패턴 (`/jobs/jobs-show-{N}-.htm`)
-    으로 보여 list 로 정상 인정.
+    각 path segment 가 ID 처럼 보이면 placeholder 로 normalize:
+      - 24자 hex (MongoDB ObjectId, 슈퍼루키)        → {HEX}
+      - 8자+ 영숫자/하이픈/점 (cambojob 의 jobs-show-N.htm) → {ID}
+      - 순수 숫자                                    → {N}
     """
     import re as _re
     from urllib.parse import urlparse
 
     if not rows:
         return 1.0
-    paths = []
-    for r in rows:
-        if not r.detail_url:
-            continue
-        p = urlparse(r.detail_url).path
-        # 숫자 sequence 를 {N} 으로, 영숫자 ID (8자 이상 영숫자) 를 {ID} 로
-        norm = _re.sub(r"\d+", "{N}", p)
-        norm = _re.sub(r"[A-Za-z0-9]{8,}", "{ID}", norm)
-        paths.append(norm)
+
+    def _norm(path: str) -> str:
+        segs = path.split("/")
+        out = []
+        for s in segs:
+            if not s:
+                out.append(s)
+            elif _re.fullmatch(r"[a-fA-F0-9]{16,}", s):  # hex ObjectId 류
+                out.append("{HEX}")
+            elif _re.fullmatch(r"\d+", s):
+                out.append("{N}")
+            elif _re.fullmatch(r"[A-Za-z0-9._\-]{6,}", s):  # 6+ 영숫자/점/하이픈 ID-like
+                out.append("{ID}")
+            else:
+                out.append(s)
+        return "/".join(out)
+
+    paths = [_norm(urlparse(r.detail_url).path) for r in rows if r.detail_url]
     if not paths:
         return 1.0
     return len(set(paths)) / len(paths)
@@ -272,6 +282,7 @@ def validate(url: str, *, timeout: int = 20) -> ValidationResult:
     fetcher_used = "static"
     api_schema_dict = None
     total_count = None
+    use_proxy_flag = False
     if r.ok:
         passed = _pick_passing(r.text, r.final_url, source_url=url)
         ext = passed or extract_list(r.text, r.final_url)
@@ -332,6 +343,34 @@ def validate(url: str, *, timeout: int = 20) -> ValidationResult:
                     ext = ed_dyn
                     fetcher_used = "dynamic"
 
+    # 우선순위 4) proxy 풀 fallback — anti-scraping 강해서 IP 차단 (슈퍼루키 류)
+    # static / dynamic 모두 403 등 거부일 때 proxy 회전으로 시도.
+    # SPA 일 가능성 → static 1회 + dynamic+proxy 1회 시도.
+    if not _passes_thresholds(ext, url):
+        from ..infra.config import PROXIES
+        from ..fetchers.dynamic import fetch as fetch_dynamic2
+        for proxy in PROXIES:
+            # 4a) static + proxy
+            rp = fetch_static(url, timeout=timeout, proxy=proxy)
+            if rp.ok:
+                cand = _pick_passing(rp.text, rp.final_url, source_url=url) \
+                    or extract_list(rp.text, rp.final_url)
+                if _passes_thresholds(cand, url):
+                    r = rp; ext = cand; fetcher_used = "static"
+                    use_proxy_flag = True
+                    api_schema_dict = None; total_count = None
+                    break
+            # 4b) dynamic + proxy (SPA + anti-scraping 사이트, 슈퍼루키)
+            rdp = fetch_dynamic2(url, proxy=proxy)
+            if rdp.ok:
+                cand = _pick_passing(rdp.text, rdp.final_url, source_url=url) \
+                    or extract_list(rdp.text, rdp.final_url)
+                if _passes_thresholds(cand, url):
+                    r = rdp; ext = cand; fetcher_used = "dynamic"
+                    use_proxy_flag = True
+                    api_schema_dict = None; total_count = None
+                    break
+
     if not r.ok or ext is None:
         return ValidationResult(
             url=url, final_url=r.final_url, ok=False, fetcher=fetcher_used,
@@ -350,6 +389,7 @@ def validate(url: str, *, timeout: int = 20) -> ValidationResult:
         fetcher=fetcher_used,
         api_schema=api_schema_dict,
         total_count=total_count,
+        use_proxy=use_proxy_flag,
     )
 
     if n < MIN_ROWS:

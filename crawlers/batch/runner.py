@@ -162,6 +162,7 @@ def run_site(
                 already_seen_ids=already_seen,
                 id_extractor=extract_external_id,
                 progress_cb=log,
+                use_proxy=bool(src.get("use_proxy")),
             )
             if not listing.ok:
                 error_msgs.append(f"{url}: {listing.error}")

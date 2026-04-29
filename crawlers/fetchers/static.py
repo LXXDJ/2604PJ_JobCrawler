@@ -34,22 +34,27 @@ def fetch(
     impersonate: str = DEFAULT_IMPERSONATE,
     headers: Optional[dict[str, str]] = None,
     session: Optional["cffi_requests.Session"] = None,
+    proxy: Optional[str] = None,
 ) -> FetchResult:
-    """단일 GET. session 이 주어지면 그 세션으로 호출 (cookie/session 유지).
-    cookie 가 필요한 anti-scraping 사이트 (cambojob 류) 대응.
+    """단일 GET.
+    - session: cookie/session 유지 (cambojob 류)
+    - proxy: "http://user:pass@host:port" — anti-scraping 강한 사이트 (슈퍼루키 류)
     """
     if cffi_requests is None:
         return FetchResult(url, 0, "", url, error="curl_cffi not installed")
 
+    proxies = {"http": proxy, "https": proxy} if proxy else None
     try:
         if session is not None:
             resp = session.get(
                 url, timeout=timeout, headers=headers or {}, allow_redirects=True,
+                proxies=proxies,
             )
         else:
             resp = cffi_requests.get(
                 url, timeout=timeout, impersonate=impersonate,
                 headers=headers or {}, allow_redirects=True,
+                proxies=proxies,
             )
         return FetchResult(
             url=url,

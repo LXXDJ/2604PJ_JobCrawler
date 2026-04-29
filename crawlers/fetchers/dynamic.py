@@ -59,6 +59,20 @@ def shutdown() -> None:
             _pw = None
 
 
+def _parse_proxy(proxy_url: str) -> Optional[dict]:
+    """'http://user:pass@host:port' → Playwright proxy dict."""
+    from urllib.parse import urlparse
+    p = urlparse(proxy_url)
+    if not p.hostname:
+        return None
+    out = {"server": f"{p.scheme}://{p.hostname}:{p.port or 80}"}
+    if p.username:
+        out["username"] = p.username
+    if p.password:
+        out["password"] = p.password
+    return out
+
+
 def fetch(
     url: str,
     *,
@@ -66,6 +80,7 @@ def fetch(
     wait_network_idle_ms: int = _WAIT_NETWORK_IDLE_MS,
     user_agent: Optional[str] = None,
     capture_api: bool = False,
+    proxy: Optional[str] = None,
 ) -> FetchResult:
     """capture_api=True 면 페이지 로드 동안 호출된 XHR/fetch 응답을 누적:
       - JSON 응답: result.api_calls (data 디코딩)
@@ -80,7 +95,12 @@ def fetch(
     api_calls: list[dict] = []
     xhr_html: list[dict] = []
     try:
-        ctx = browser.new_context(user_agent=user_agent or _USER_AGENT)
+        ctx_kwargs = {"user_agent": user_agent or _USER_AGENT}
+        if proxy:
+            pp = _parse_proxy(proxy)
+            if pp:
+                ctx_kwargs["proxy"] = pp
+        ctx = browser.new_context(**ctx_kwargs)
         page = ctx.new_page()
         # stealth — anti-bot 감지 우회 (navigator.webdriver, canvas fingerprint 등 위장).
         # cambojob 같이 강한 anti-scraping 사이트 통과 가능성 ↑.

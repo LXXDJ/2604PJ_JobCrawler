@@ -221,6 +221,7 @@ def crawl_list(
     already_seen_ids: set[str] | None = None,
     id_extractor=None,
     progress_cb=None,
+    use_proxy: bool = False,
 ) -> CrawlListResult:
     """페이지네이션 따라가며 신규 row 만 수집 (증분).
 
@@ -229,14 +230,27 @@ def crawl_list(
     - id_extractor: detail_url → external_id 함수 (보통 extract_external_id).
                      없으면 detail_url 자체를 ID 로 사용.
     """
+    # proxy 풀 — use_proxy=True 면 매 fetch 마다 회전
+    from ..infra.config import PROXIES
+    _proxy_pool = list(PROXIES) if use_proxy else []
+    _proxy_idx = {"i": 0}
+
+    def _next_proxy() -> Optional[str]:
+        if not _proxy_pool:
+            return None
+        p = _proxy_pool[_proxy_idx["i"] % len(_proxy_pool)]
+        _proxy_idx["i"] += 1
+        return p
+
     if fetcher == "dynamic":
         from ..fetchers.dynamic import fetch as _fetch_dynamic
         def _fetch(url, **kwargs):
-            return _fetch_dynamic(url)
+            proxy = _next_proxy() if use_proxy else None
+            return _fetch_dynamic(url, proxy=proxy)
     else:
         # static 우선, 403 등 anti-scraping 차단 시 dynamic 으로 자동 fallback.
         # 한 번이라도 dynamic 으로 성공하면 그 source 는 dynamic 모드로 stick.
-        _session = _make_session()
+        _session = None if use_proxy else _make_session()
         _state = {"force_dynamic": False}
 
         def _fetch(url, **kwargs):
@@ -245,8 +259,9 @@ def crawl_list(
                 return _fetch_dynamic(url)
             headers = kwargs.pop("headers", None) or {}
             headers.setdefault("Referer", source_url)
-            r = fetch_static(url, headers=headers, session=_session, **kwargs)
-            if r.status == 403 or (r.ok and len(r.text) < 500):
+            proxy = _next_proxy() if use_proxy else None
+            r = fetch_static(url, headers=headers, session=_session, proxy=proxy, **kwargs)
+            if not use_proxy and (r.status == 403 or (r.ok and len(r.text) < 500)):
                 # anti-scraping 차단 → 30s sleep 후 dynamic fallback
                 # (즉시 dynamic 호출 시 사이트가 같은 IP 의 즉시 패턴을 감지하고
                 #  decoy HTML 반환하는 케이스 — cambojob 류 — 대응)

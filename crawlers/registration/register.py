@@ -69,6 +69,8 @@ def _build_source(v: ValidationResult, label: str) -> dict:
         src["api_schema"] = v.api_schema
     if v.total_count is not None:
         src["total_count"] = v.total_count
+    if getattr(v, "use_proxy", False):
+        src["use_proxy"] = True
     return src
 
 
@@ -77,37 +79,42 @@ def _extract_site_name(html: str) -> Optional[str]:
 
     우선순위:
       1. og:site_name (가장 정확)
-      2. og:title 첫 segment ('CamHR - Find jobs ...' 같이 사이트명-슬로건 형식)
-      3. <title> 의 segment 중 가장 짧은 것
-         (SEO 페이지는 'X|Y|Z|... -- SiteName' 처럼 사이트명이 끝에 오기도 함)
+      2. og:title / <title> 의 segment 중 가장 짧은 (=사이트명일 확률 높은) 것
+         - separator: `|`, ` - `, ` – `, ` -- `, ` :: `, `,`
+         - 'CamHR - Find jobs ...' → 'CamHR'
+         - '20대에게 가장 필요한 커리어 정보, 슈퍼루키' → '슈퍼루키'
+         - 'X|Y|Z|... -- SiteName' → 'SiteName'
     """
     import re
 
     def _segments(s: str) -> list[str]:
-        # `|`, ` - `, ` – `, ` -- `, ` :: ` 로 split
-        parts = re.split(r"\s*\|\s*|\s+[-–]{1,2}\s+|\s+::\s+", s)
+        # `|`, ` - `, ` – `, ` -- `, ` :: `, `,` 로 split
+        parts = re.split(r"\s*\|\s*|\s+[-–]{1,2}\s+|\s+::\s+|\s*,\s*", s)
         return [p.strip() for p in parts if p.strip()]
 
+    def _best_segment(s: str) -> Optional[str]:
+        segs = _segments(re.sub(r"\s+", " ", s))
+        # 길이 ≥ 2 만 — 'X' 같은 1글자 abbr 회피
+        segs = [p for p in segs if len(p) >= 2]
+        if not segs:
+            return None
+        return min(segs, key=len)[:80]
+
     m = re.search(r'<meta[^>]+property=["\']og:site_name["\'][^>]+content=["\']([^"\']+)', html, re.I)
-    if m:
-        v = m.group(1).strip()
-        if v:
-            return v[:80]
+    if m and m.group(1).strip():
+        return m.group(1).strip()[:80]
 
     m = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)', html, re.I)
     if m:
-        segs = _segments(re.sub(r"\s+", " ", m.group(1)))
-        if segs:
-            return segs[0][:80]
+        best = _best_segment(m.group(1))
+        if best:
+            return best
 
     m = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
     if m:
-        title = re.sub(r"\s+", " ", m.group(1)).strip()
-        segs = _segments(title)
-        if segs:
-            # 가장 짧은 segment = 사이트명일 가능성 높음 (SEO 키워드는 김)
-            best = min(segs, key=len)
-            return best[:80]
+        best = _best_segment(m.group(1))
+        if best:
+            return best
     return None
 
 

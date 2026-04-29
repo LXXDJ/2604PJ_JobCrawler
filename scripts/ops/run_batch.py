@@ -29,10 +29,21 @@ def _short_error(err: str | None) -> str:
     return s[:120]
 
 
+def _format_elapsed(seconds: float) -> str:
+    total = int(round(seconds))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}시간 {m}분 {s}초"
+    if m:
+        return f"{m}분 {s}초"
+    return f"{s}초"
+
+
 def _build_slack_message(rep: BatchReport, elapsed: float) -> str:
     header = (
         f":rotating_light: *크롤 완료*: 성공 {rep.succeeded} / 실패 {rep.failed} "
-        f"(전체 {rep.total_sites}, {elapsed:.0f}s)\n"
+        f"(전체 {rep.total_sites}, {_format_elapsed(elapsed)})\n"
         f":new: 신규 공고 건수 {rep.inserted}\n"
         f"---"
     )
