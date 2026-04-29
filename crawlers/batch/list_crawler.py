@@ -24,7 +24,7 @@ from ..fetchers.static import fetch as fetch_static, make_session as _make_sessi
 
 
 PAGINATION_PARAMS = ["pageIndex", "currentPage", "page", "pageNum", "pageNo",
-                     "cpage", "startPage", "p"]
+                     "cpage", "startPage", "p", "p_page"]
 MAX_PAGES = 1000                  # 안전장치 (페이지 끝나면 자동 break — 정상 사이트는
                                   # break 조건으로 조기 종료. 대형 사이트 cap 만 의미)
 NEW_ROWS_BREAK_THRESHOLD = 0.20   # 새 row 비율이 이 미만이면 페이지 끝으로 간주
@@ -244,9 +244,34 @@ def crawl_list(
 
     if fetcher == "dynamic":
         from ..fetchers.dynamic import fetch as _fetch_dynamic
+        # use_proxy 사이트는 프록시 풀 대역폭 한도가 있으니 image/font/media 차단
+        # → 페이지당 트래픽 60–80% 절감. 텍스트 추출 결과엔 영향 없음.
+        _block = bool(use_proxy)
         def _fetch(url, **kwargs):
-            proxy = _next_proxy() if use_proxy else None
-            return _fetch_dynamic(url, proxy=proxy)
+            if not (use_proxy and _proxy_pool):
+                return _fetch_dynamic(url, block_resources=_block)
+            # 프록시 회전 retry — TUNNEL/PROXY 에러면 다음 프록시로.
+            # 풀 전체 실패 시 무프록시 fallback 1회 (풀 만료/차단 대응).
+            last = None
+            for _ in range(len(_proxy_pool)):
+                proxy = _next_proxy()
+                r = _fetch_dynamic(url, proxy=proxy, block_resources=_block)
+                if r.ok:
+                    return r
+                last = r
+                err = (r.error or "").upper()
+                if "TUNNEL" not in err and "PROXY" not in err:
+                    return r  # 프록시 무관 에러 (timeout 등) — 회전 의미 없음
+                try:
+                    log(f"    [proxy fail] {proxy.split('@')[-1][:32]} {err[:60]} → 다음")
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                log(f"    [proxy fallback] 풀 {len(_proxy_pool)}개 모두 실패 → 무프록시 retry")
+            except Exception:  # noqa: BLE001
+                pass
+            r = _fetch_dynamic(url, block_resources=_block)
+            return r if r.ok else (last or r)
     else:
         # static 우선, 403 등 anti-scraping 차단 시 dynamic 으로 자동 fallback.
         # 한 번이라도 dynamic 으로 성공하면 그 source 는 dynamic 모드로 stick.
@@ -388,6 +413,10 @@ def crawl_list(
     # 하고 같은 결과 반복하는 케이스 차단).
     session_seen_ids: set[str] = set(page1_seen_ids)
 
+    # 증분 종료 카운터 — 연속 N 페이지 새글 0 이면 break (트래픽 절약).
+    # 채용 사이트는 date desc 정렬이라 새글 없는 페이지가 N번 연속이면 그 뒤도 다 old.
+    empty_streak = 0
+
     # ---- pages 2..N (같은 시그니처 + prefix 매칭만 채택)
     import time as _time
     page_sleep = 0.5     # 정상 사이트는 fast
@@ -461,6 +490,17 @@ def crawl_list(
         session_seen_ids.update(page_ids)
         result.pages_crawled = page
         log(f"    page {page}: total={page_total} added={page_inserted}")
+
+        # 증분 break: page_inserted==0 이 연속 CONSECUTIVE_LOW_BREAK 번이면 종료.
+        # (page 1 에서 잡힌 새글 외 더 이상 들어올 게 없다는 휴리스틱.
+        #  date desc 정렬 가정 — 깊은 페이지일수록 옛날글이라 DB 에 있을 확률 ↑)
+        if page_inserted == 0:
+            empty_streak += 1
+            if empty_streak >= CONSECUTIVE_LOW_BREAK:
+                log(f"    break: 최근 {empty_streak} 페이지 연속 새글 0 → 증분 종료")
+                break
+        else:
+            empty_streak = 0
     else:
         # for-loop 가 break 없이 끝남 = MAX_PAGES cap 도달
         log(f"    [warn] MAX_PAGES={max_pages} cap 도달 — 더 가져올 row 가 있을 수 있음")

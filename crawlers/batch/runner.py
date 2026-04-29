@@ -145,7 +145,11 @@ def run_site(
             from ..extractors.api_schema import ApiSchema
             from ..fetchers.api import crawl_api
             schema = ApiSchema.from_dict(src["api_schema"])
-            api_res = crawl_api(schema, already_seen_ids=already_seen)
+            api_res = crawl_api(
+                schema,
+                already_seen_ids=already_seen,
+                use_proxy=bool(src.get("use_proxy")),
+            )
             if not api_res.ok:
                 error_msgs.append(f"{url}: {api_res.error}")
                 rep.notes.append(f"api fail: {url} ({api_res.error})")
@@ -201,6 +205,10 @@ def run_site(
         progress_step = 25
         for j, row in enumerate(rows_to_process, 1):
             ext_id = extract_external_id(row.detail_url)
+
+            # 이미 DB 에 있는 (이전 배치에서 본) 공고면 skip — 중복 적재 방지
+            if ext_id in already_seen:
+                continue
 
             # cross-source dedup — 다른 source 에 같은 공고 있으면 skip
             if row.detail_url in cross_source_seen:

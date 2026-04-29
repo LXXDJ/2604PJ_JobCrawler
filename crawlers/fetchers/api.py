@@ -50,14 +50,42 @@ def crawl_api(
     *,
     already_seen_ids: Optional[set[str]] = None,
     max_pages: int = MAX_PAGES,
+    use_proxy: bool = False,
 ) -> ApiCrawlResult:
     seen = set(already_seen_ids or ())
     result = ApiCrawlResult()
 
+    # 프록시 풀 — anti-scraping API (슈퍼루키 등) 가 무프록시 차단 시 회전 사용.
+    # 풀 전체 실패 시 무프록시 fallback 1회.
+    from ..infra.config import PROXIES
+    _proxy_pool = list(PROXIES) if use_proxy else []
+    _proxy_idx = {"i": 0}
+
+    def _next_proxy() -> Optional[str]:
+        if not _proxy_pool:
+            return None
+        p = _proxy_pool[_proxy_idx["i"] % len(_proxy_pool)]
+        _proxy_idx["i"] += 1
+        return p
+
+    def _do_fetch(u: str):
+        if not (use_proxy and _proxy_pool):
+            return fetch_static(u, headers={"Accept": "application/json"})
+        last = None
+        for _ in range(len(_proxy_pool)):
+            proxy = _next_proxy()
+            r = fetch_static(u, headers={"Accept": "application/json"}, proxy=proxy)
+            if r.ok:
+                return r
+            last = r
+        # 풀 전체 실패 → 무프록시 fallback
+        r = fetch_static(u, headers={"Accept": "application/json"})
+        return r if r.ok else (last or r)
+
     for page in range(1, max_pages + 1):
         url = _format_url(schema.api_url_pattern,
                           page=page, size=schema.page_size)
-        r = fetch_static(url, headers={"Accept": "application/json"})
+        r = _do_fetch(url)
         if not r.ok:
             if page == 1:
                 result.error = r.error or f"HTTP {r.status}"

@@ -73,6 +73,9 @@ def _parse_proxy(proxy_url: str) -> Optional[dict]:
     return out
 
 
+_BLOCKED_RESOURCE_TYPES = {"image", "font", "media", "stylesheet"}
+
+
 def fetch(
     url: str,
     *,
@@ -81,6 +84,7 @@ def fetch(
     user_agent: Optional[str] = None,
     capture_api: bool = False,
     proxy: Optional[str] = None,
+    block_resources: bool = False,
 ) -> FetchResult:
     """capture_api=True 면 페이지 로드 동안 호출된 XHR/fetch 응답을 누적:
       - JSON 응답: result.api_calls (data 디코딩)
@@ -109,6 +113,22 @@ def fetch(
             Stealth().apply_stealth_sync(page)
         except Exception:  # noqa: BLE001
             pass
+
+        # 트래픽 절약 — 텍스트 추출만 필요할 때 image/font/media/stylesheet abort.
+        # 프록시 풀 대역폭 한도 사이트 (use_proxy=True) 에서 60–80% 트래픽 절감.
+        if block_resources:
+            def _route(route):
+                try:
+                    if route.request.resource_type in _BLOCKED_RESOURCE_TYPES:
+                        route.abort()
+                    else:
+                        route.continue_()
+                except Exception:  # noqa: BLE001
+                    try:
+                        route.continue_()
+                    except Exception:  # noqa: BLE001
+                        pass
+            page.route("**/*", _route)
 
         if capture_api:
             import json as _json
