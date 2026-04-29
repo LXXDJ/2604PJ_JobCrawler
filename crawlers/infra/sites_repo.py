@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from typing import Any, Optional
+from urllib.parse import urlparse, urlunparse
 
 from .db import get_conn
 
@@ -12,6 +13,14 @@ def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["sources"] = json.loads(d.get("sources") or "[]")
     return d
+
+
+def _normalize_home_url(url: str) -> str:
+    """origin-only home_url 은 항상 '/' 로 끝나게 통일."""
+    p = urlparse(url)
+    if not p.path:
+        return urlunparse(p._replace(path="/"))
+    return url
 
 
 def upsert_site(
@@ -23,6 +32,7 @@ def upsert_site(
     status_reason: Optional[str] = None,
     sources: Optional[list[dict]] = None,
 ) -> None:
+    home_url = _normalize_home_url(home_url)
     sources_json = json.dumps(sources or [], ensure_ascii=False)
     with get_conn() as conn:
         conn.execute(

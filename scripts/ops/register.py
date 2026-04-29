@@ -17,7 +17,25 @@ sys.path.insert(0, str(ROOT))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 from crawlers.infra.db import init_db
+from crawlers.registration.naver_cafe import is_naver_cafe_url, register_naver_cafe
 from crawlers.registration.register import register
+
+
+def _print_cafe_report(rep) -> None:
+    print(f"\n[{rep.final_status.upper()}] {rep.home_url}  (site_id={rep.site_id})  [naver_cafe]")
+    if rep.cafe_id:
+        print(f"  cafe: id={rep.cafe_id} slug={rep.cafe_slug} name={rep.cafe_name}")
+    if rep.candidate_menus:
+        print(f"  job menus matched: {len(rep.candidate_menus)}")
+        for m in rep.candidate_menus:
+            print(f"    - {m['menuId']:>4}  {m['name']}")
+    if rep.sources:
+        print(f"  sources ({len(rep.sources)}):")
+        for s in rep.sources:
+            print(f"    - menu={s['menu_id']} ({s.get('menu_name','')})  "
+                  f"rows={s['list_rows']}")
+    for note in rep.notes:
+        print(f"  note: {note}")
 
 
 def _print_report(rep) -> None:
@@ -67,14 +85,18 @@ def main() -> None:
         init_db()
 
     for url in urls:
-        rep = register(
-            url,
-            name=args.name,
-            top_n=args.top,
-            use_snippet=args.snippet,
-            dry_run=args.dry_run,
-        )
-        _print_report(rep)
+        if is_naver_cafe_url(url):
+            rep = register_naver_cafe(url, name=args.name, dry_run=args.dry_run)
+            _print_cafe_report(rep)
+        else:
+            rep = register(
+                url,
+                name=args.name,
+                top_n=args.top,
+                use_snippet=args.snippet,
+                dry_run=args.dry_run,
+            )
+            _print_report(rep)
 
 
 if __name__ == "__main__":

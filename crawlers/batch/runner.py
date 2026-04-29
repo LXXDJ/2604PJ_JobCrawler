@@ -155,6 +155,30 @@ def run_site(
             rep.rows_seen += len(api_res.rows)
             rows_to_process = api_res.rows
             log(f"  [{site_id}]   api {api_res.pages_crawled} pages, {len(api_res.rows)} rows")
+        elif fetcher == "naver_cafe":
+            from ..fetchers.naver_cafe import crawl_cafe
+            cafe_id = src.get("cafe_id")
+            menu_id = src.get("menu_id")
+            if not cafe_id or not menu_id:
+                error_msgs.append(f"{url}: cafe_id/menu_id missing")
+                rep.notes.append(f"naver_cafe meta missing: {url}")
+                log(f"  [{site_id}]   naver_cafe meta missing")
+                continue
+            cafe_res = crawl_cafe(
+                cafe_id, menu_id,
+                already_seen_ids=already_seen,
+                progress_cb=log,
+            )
+            if not cafe_res.ok:
+                error_msgs.append(f"{url}: {cafe_res.error}")
+                rep.notes.append(f"naver_cafe fail: {url} ({cafe_res.error})")
+                log(f"  [{site_id}]   naver_cafe fail: {cafe_res.error}")
+                continue
+            any_source_ok = True
+            rep.rows_seen += len(cafe_res.rows)
+            rows_to_process = cafe_res.rows
+            log(f"  [{site_id}]   naver_cafe {cafe_res.pages_crawled} pages, "
+                f"{len(cafe_res.rows)} rows")
         else:
             listing = crawl_list(
                 url,
@@ -183,7 +207,8 @@ def run_site(
                 continue
 
             detail = None
-            if fetch_details:
+            # naver_cafe 는 detail 페이지가 SPA — 별도 API 필요. 현재는 list 의 subject 로 충분.
+            if fetch_details and fetcher != "naver_cafe":
                 detail = fetch_detail(row.detail_url)
                 if not detail.ok:
                     rep.detail_errors += 1

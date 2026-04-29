@@ -150,17 +150,16 @@ python -m scripts.debug.validate <url>
 
 ### 현재 등록된 사이트 매핑 (8개)
 
-| site_id | 단계 | 누적 jobs | 이유 |
-|---|---|---|---|
-| **hanin** | **1단계** static | 14 | 평범한 PHP 게시판 (`bbs/board.php`), HTML 그대로 list 들어있음 |
-| **siemreap** | **1단계** static | 15 | 재캄보디아한인회와 같은 게시판 구조 (`?page=N` 무시 사이트지만 fetch 자체는 static) |
-| **hrdkorea** | **1단계** static | 580 | JSP `jobRecruit.do` 에 list HTML 그대로 — `currentPage=N` 페이지네이션만 학습 |
-| **peoplenjob** | **1단계** static | 9,985 | 정적 HTML list (`/jobs`). 가장 많이 적재된 사이트 |
-| **cambojob** | **2단계** dynamic | 610 | anti-scraping 대응 (path-segment 페이지네이션, Referer 검사, 세션 쿠키 필요). static 으로는 차단당해서 배치마다 Playwright 로 가야 함 |
-| **worldjob** | **3단계** xhr_html → static 으로 저장 | 598 | 메인 페이지는 SPA 라 정적 fetch 가 빈 shell. Playwright 로 띄워서 `getEpmtList.do` 라는 AJAX endpoint 가 list HTML 만 따로 반환하는 걸 발견 → 그 URL 을 source 로 저장하고 fetcher='static' 으로 둠 |
-| **camhr** | **4단계** api | 1,717 | XHR 응답이 JSON. `/a/job` endpoint + id/title 필드 자동 매칭. 배치는 JSON 페이지네이션으로 수집 |
-| **superookie** | (등록 실패 / sources 비어있음) | 0 | 재등록 또는 진단 필요 — `python -m scripts.debug.dry_register <url>` |
-
+| site_id | 이름 | 단계 | 누적 jobs | 이유 |
+|---|---|---|---|---|
+| **hanin** | 재캄보디아한인회 | **1단계** static | 14 | 평범한 PHP 게시판 (`bbs/board.php`), HTML 그대로 list 들어있음 |
+| **siemreap** | 재캄보디아시엠립한인회 | **1단계** static | 15 | 재캄보디아한인회와 같은 게시판 구조 (`?page=N` 무시 사이트지만 fetch 자체는 static) |
+| **hrdkorea** | 한국산업인력공단 고용허가제 통합서비스 | **1단계** static | 580 | JSP `jobRecruit.do` 에 list HTML 그대로 — `currentPage=N` 페이지네이션만 학습 |
+| **peoplenjob** | 피플앤잡 | **1단계** static | 10,146 | 정적 HTML list (`/jobs`). 가장 많이 적재된 사이트 |
+| **cambojob** | CamboJob | **2단계** dynamic | 610 | anti-scraping 대응 (path-segment 페이지네이션, Referer 검사, 세션 쿠키 필요). static 으로는 차단당해서 배치마다 Playwright 로 가야 함 |
+| **superookie** | 슈퍼루키 | **2단계** dynamic + 프록시 회전 | 979 | SPA + IP 차단까지 있어 정적 fetch 는 비어있고 단일 IP 로도 차단됨. 배치마다 Playwright 렌더링 + `use_proxy=true` 로 프록시 회전. 등록된 사이트 중 가장 비싼 케이스 |
+| **worldjob** | 월드잡플러스 | **3단계** xhr_html → static 으로 저장 | 600 | 메인 페이지는 SPA 라 정적 fetch 가 빈 shell. Playwright 로 띄워서 `getEpmtList.do` 라는 AJAX endpoint 가 list HTML 만 따로 반환하는 걸 발견 → 그 URL 을 source 로 저장하고 fetcher='static' 으로 둠 |
+| **camhr** | CamHR | **4단계** api | 1,737 | XHR 응답이 JSON. `/a/job` endpoint + id/title 필드 자동 매칭. 배치는 JSON 페이지네이션으로 수집 |
 
 ---
 
@@ -171,7 +170,7 @@ python -m scripts.debug.validate <url>
 3단계 (→ static 저장)  worldjob                                ← 등록만 비쌌고 배치는 1단계급
 4단계 (api)            camhr                                   ← 배치는 가벼운 JSON GET
 2단계 (dynamic)        cambojob                                ← 배치마다 매번 Playwright (비쌈)
-미등록                  superookie                              ← sources 비어있어 배치에서 skip
+2단계 + 프록시 회전     superookie                              ← 위에 프록시까지 (가장 비쌈)
 ```
 
-**관찰**: 등록 성공한 7개 사이트 중 6개가 가벼운 fetcher 로 안착. 2단계(dynamic)에 머물러 있는 cambojob 만 배치 비용이 큼 — anti-scraping 때문에 어쩔 수 없는 케이스. peoplenjob 은 가장 많은 9,985건을 1단계 static 으로 가져오고 있어 효율 최고.
+**관찰**: 8개 사이트 중 6개가 가벼운 fetcher (1·3·4단계) 로 안착. 2단계(dynamic)에 머물러 있는 cambojob, superookie 는 배치 비용이 큼 — anti-scraping / SPA + IP 차단 때문에 어쩔 수 없는 케이스이고, 특히 superookie 는 프록시 회전까지 들어가 가장 비싸다. peoplenjob 은 가장 많은 10,146건을 1단계 static 으로 가져오고 있어 효율 최고.

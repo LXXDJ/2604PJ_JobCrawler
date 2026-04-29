@@ -39,11 +39,19 @@ _SKIP_LABELS = {
 
 
 def extract_site_id(url: str) -> str:
-    netloc = urlparse(url).netloc.lower().strip()
+    p = urlparse(url)
+    netloc = p.netloc.lower().strip()
     if not netloc:
         return ""
 
     host = netloc.split(":")[0]
+
+    # 네이버 카페: 카페별로 다른 site, 슬러그를 site_id 로
+    if host in ("cafe.naver.com", "m.cafe.naver.com"):
+        segs = [s for s in p.path.split("/") if s]
+        if segs and segs[0] != "f-e":
+            return segs[0]
+
     parts = host.split(".")
     if not parts:
         return ""
