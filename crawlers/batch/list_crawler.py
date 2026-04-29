@@ -244,9 +244,10 @@ def crawl_list(
 
     if fetcher == "dynamic":
         from ..fetchers.dynamic import fetch as _fetch_dynamic
-        # use_proxy 사이트는 프록시 풀 대역폭 한도가 있으니 image/font/media 차단
-        # → 페이지당 트래픽 60–80% 절감. 텍스트 추출 결과엔 영향 없음.
-        _block = bool(use_proxy)
+        # dynamic fetcher 는 항상 image/font/media/stylesheet 차단.
+        # use_proxy=True 는 프록시 대역폭 한도, use_proxy=False 는 내 IP 트래픽 —
+        # 어느 쪽이든 텍스트 추출엔 영향 없으므로 켜둔다. 페이지당 60–80% 절감.
+        _block = True
         def _fetch(url, **kwargs):
             if not (use_proxy and _proxy_pool):
                 return _fetch_dynamic(url, block_resources=_block)

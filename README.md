@@ -224,7 +224,7 @@ python -m scripts.debug.validate <url>
 - 회전 의미 없는 에러(timeout 등)는 즉시 break
 
 #### 3. **Playwright resource block** — image/font/media/stylesheet abort
-슈퍼루키는 api 로 강등되어 무관해졌지만, 다른 dynamic 사이트(cambojob 등) 에는 여전히 적용. `use_proxy=true` 인 사이트는 자동으로 켜짐. 페이지당 트래픽 60–80% 절감 (텍스트 추출 결과엔 영향 없음).
+슈퍼루키는 api 로 강등되어 무관해졌지만, 다른 dynamic 사이트(cambojob 등) 에는 여전히 적용. **dynamic fetcher 는 항상 켜짐** (use_proxy 무관) — 프록시 한도든 내 IP 트래픽이든 어느 쪽이든 절감. 페이지당 트래픽 60–80% 절감 (텍스트 추출 결과엔 영향 없음).
 
 #### 4. **증분 break 강화** — 연속 N 페이지 새 글 0이면 break
 기존엔 page 1 끝에서만 break (모든 ID 가 DB 에 있을 때). 새 글 1개라도 잡히면 끝까지(21~22페이지) 풀크롤하는 문제. `empty_streak` 카운터 도입해서 연속 2페이지 동안 added=0 이면 종료. 풀크롤 트래픽이 ~50MB → ~5MB 로 감소 (date desc 정렬 사이트 가정).
@@ -239,3 +239,14 @@ python -m scripts.debug.validate <url>
 ### 알아둘 것 (운영 위험)
 - **access_token** 은 슈퍼루키 서버 발급 정적 키. URL 의 `?access_token=...` 에 박혀있음. 만료/변경 시 슈퍼루키 API 가 401/403 반환 → Playwright 로 페이지 재캡쳐해서 새 token 추출 후 ApiSchema 갱신 필요. (dynamic 코드는 그대로 남아있어 폴백 가능)
 - **프록시 (webshare)** 는 token 과 별개. 무료 1GB 한도 소진 시 402(bandwidthlimit), IP 살아있어도 트래픽 거부. 새 계정/plan 으로 갱신 (`.env` 의 `PROXIES=` 갱신).
+
+### 추가 검증 — 더 적용할 카드는 있나 (2026-04-30)
+
+**확인 후 이미 적용된 것**
+- **gzip 자동 압축**: `curl_cffi(impersonate="chrome124")` 가 자동으로 `Accept-Encoding: gzip, deflate, br` 보내고 응답 자동 decode. 별도 코드 변경 불필요 — wire 트래픽은 이미 gzip 상태로 받음.
+- **dynamic resource block 항상 켜짐**: 위 §9.3 — `use_proxy` 조건부 → 항상 켜짐으로 변경. cambojob 같은 `use_proxy=False` 인 dynamic 사이트도 자동 절감.
+
+**검토 후 보류**
+- **conditional GET (If-Modified-Since/ETag → 304)**: 22개 active 사이트 헤더 서베이 결과 ETag/Last-Modified 주는 곳은 3개뿐 (camhr/hanin/siemreap). naver_cafe 12개와 슈퍼루키 등 트래픽 큰 곳은 모두 `no-cache, no-store` 정책 → 304 못 받음. 코드 변경 비용 대비 효과 작아 미적용.
+- **cambojob static 강등**: static HTML(359KB) 에 detail 링크 30개 직접 노출은 확인되었으나 페이지네이션(path-segment + Referer) 처리 검증 필요. 현재 cambojob 은 `use_proxy=False` 라 webshare 한도 영향 없음 — 절박도 낮아 보류.
+- **detail fetch 비활성화 source 단위 옵션**: 큰 효과지만 데이터 품질 trade-off. 트래픽 압박 재발 시 재검토.
