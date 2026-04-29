@@ -287,19 +287,16 @@ def crawl_list(
         result.error = "no list container on page 1"
         return result
 
-    # prefix 는 모든 후보에서 학습 (row 가 많은 쪽이 진짜 list)
-    all_rows_p1 = multi.all_rows
-    prefix = _learn_prefix(all_rows_p1)
+    # 가장 큰 컨테이너 1개 우선 채택 → 그 row 들로 prefix 학습.
+    # (이전엔 multi.all_rows 의 빈도 기반이었는데, cambojob 처럼 본문 list +
+    #  여러 sub-category list 가 공존하면 sub-list 의 합산 row 가 더 많아서
+    #  prefix 학습이 sub-list 쪽으로 가버림 → 본문 list 잘못 잡힘)
+    best = max(multi.candidates, key=lambda e: e.count)
+    prefix = _learn_prefix(best.rows)
     if not prefix:
         result.error = "could not learn detail prefix"
         return result
     result.detail_url_prefix = prefix
-
-    # prefix 매칭 row 가 가장 많은 컨테이너 1개를 lock
-    best = _pick_best_by_prefix(multi.candidates, prefix)
-    if best is None:
-        result.error = "page 1 has no container matching prefix"
-        return result
     locked_sig = _normalize_sig(best.container_signature)
     result.container_signature = locked_sig
 
@@ -325,6 +322,7 @@ def crawl_list(
         return result
 
     log(f"    page 1: total={page1_total} new_ids={len(page1_new_ids)} rows_added={sum(1 for r in result.rows)}")
+    log(f"    [debug] learned prefix={prefix!r}, locked_sig={locked_sig!r}")
     if seen_ids and not page1_new_ids:
         return result
 
@@ -406,7 +404,14 @@ def crawl_list(
                 f"(found sigs: {[e.container_signature for e in multi_p.candidates[:3]]})")
             break
 
-        page_ext = max(same_sig, key=lambda e: e.count)
+        # prefix 매칭 row 가 가장 많은 컨테이너 채택 (단순 max-by-count 아님)
+        # — page 2 에 같은 normalized sig 이지만 다른 prefix 의 더 큰 컨테이너가
+        #   있을 때 (cambojob: ul.qmn-wrap 같은 nav ul) 잘못 채택되는 버그 fix
+        page_ext = _pick_best_by_prefix(same_sig, prefix)
+        if page_ext is None:
+            page_ext = max(same_sig, key=lambda e: e.count)
+        log(f"    page {page} same_sig: {len(same_sig)}, picked: {page_ext.container_signature} "
+            f"(count={page_ext.count}, prefix-matched={sum(1 for r in page_ext.rows if r.detail_url and r.detail_url.startswith(prefix))})")
         page_rows = _filter_by_prefix(page_ext.rows, prefix)
         if not page_rows:
             log(f"    break: page {page} prefix {prefix!r} 매칭 row 없음 "
