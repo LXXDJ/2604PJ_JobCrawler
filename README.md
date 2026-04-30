@@ -121,6 +121,10 @@ streamlit run dashboard/app.py
 # 사이트가 등록 실패할 때 까보기
 python -m scripts.debug.dry_register <url>
 python -m scripts.debug.validate <url>
+
+# 배치 스케줄(Windows schtasks) 재설치
+# scripts/ops/install_schtask.py 의 INTERVAL_HOURS / INTERVAL_MINUTES 수정 후 실행
+python -m scripts.ops.install_schtask
 ```
 
 ---

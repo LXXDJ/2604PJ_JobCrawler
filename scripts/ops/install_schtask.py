@@ -16,8 +16,8 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
 # 배치 간격 — 두 값을 합산. (총 = HOURS*60 + MINUTES) 분.
 # 둘 다 0 또는 None 이면 에러.
-INTERVAL_HOURS   = 0       # 시 부분 (0, 1, 6, 12 등)
-INTERVAL_MINUTES = 30      # 분 부분 (0, 30, 45 등 임의 값)
+INTERVAL_HOURS   = 8       # 시 부분 (0, 1, 6, 12 등)
+INTERVAL_MINUTES = 0       # 분 부분 (0, 30, 45 등 임의 값)
 
 # 예시:
 #   30분 마다             → HOURS=0, MINUTES=30  (00:00, 00:30, 01:00, ...)
