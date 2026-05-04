@@ -90,6 +90,35 @@ def _effective_href(a: Tag) -> str:
     return href
 
 
+_SORT_ONLY_PARAMS = {
+    "sst", "sod", "sfl", "stx", "sca",       # gnuboard5 search/sort
+    "page", "pageIndex", "pagenumber", "pageNum", "pageNo", "currentPage",
+    "sort", "order", "orderby", "by", "dir", "asc", "desc",
+    "sop", "search_field", "search_str", "scategory",
+}
+_ID_LIKE_PARAMS = {
+    "wr_id", "idx", "no", "seq", "id", "post", "article", "content_id",
+    "boardId", "post_id", "article_id", "uid", "view_no", "num",
+}
+
+
+def _is_sort_or_pagination_only(url: str) -> bool:
+    """URL query 가 sort/pagination 파라미터들로만 구성되어 있고 id-like 가 없으면 True.
+    헤더의 정렬 link, 페이지네이션 link 등을 detail row 로 오인하지 않기 위함.
+    """
+    from urllib.parse import urlparse, parse_qs
+    p = urlparse(url)
+    if not p.query:
+        return False
+    qs = parse_qs(p.query, keep_blank_values=True)
+    keys = set(qs.keys())
+    # id-like 파라미터가 있으면 정상 detail URL
+    if keys & _ID_LIKE_PARAMS:
+        return False
+    # 모든 키가 sort/pagination 류이면 거름
+    return bool(keys) and keys.issubset(_SORT_ONLY_PARAMS | {"bo_table", "tab", "category"})
+
+
 def _abs(base: str, href: str) -> Optional[str]:
     if not href:
         return None
@@ -121,6 +150,8 @@ def _abs(base: str, href: str) -> Optional[str]:
     abs_url = urljoin(base, href)
     p = urlparse(abs_url)
     if p.scheme not in ("http", "https"):
+        return None
+    if _is_sort_or_pagination_only(abs_url):
         return None
     return abs_url
 

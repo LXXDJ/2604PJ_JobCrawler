@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -21,6 +22,36 @@ from ..infra.jobs_repo import insert_job
 from ..infra.sites_repo import get_site, record_attempt, update_status
 from .detail_crawler import fetch_detail
 from .list_crawler import crawl_list
+
+
+# gnuboard / 한국 BBS 흔한 list 라벨 prefix/suffix — title 에서 제거
+_TITLE_PREFIX_RE = re.compile(
+    r"^(텍스트|파일첨부|첨부파일|이미지|동영상|공지|NEW|HOT|new|hot|N|H)\s+"
+)
+_TITLE_SUFFIX_RE = re.compile(
+    r"\s*(댓글\s*\d+\s*개?|링크|URL|첨부|new|N|hot|H|"
+    r"\(\s*\d+\s*\)|\[\s*\d+\s*\])\s*$",
+    re.IGNORECASE,
+)
+
+
+def _clean_title(t: Optional[str]) -> Optional[str]:
+    if not t:
+        return t
+    s = t.strip()
+    # prefix 반복 제거 (e.g. "텍스트 파일첨부 ...")
+    while True:
+        m = _TITLE_PREFIX_RE.match(s)
+        if not m:
+            break
+        s = s[m.end():]
+    # suffix 반복 제거
+    while True:
+        m = _TITLE_SUFFIX_RE.search(s)
+        if not m:
+            break
+        s = s[:m.start()].rstrip()
+    return s.strip() or t
 
 
 FAILURE_THRESHOLD_FOR_DEAD = 7  # consecutive_failures 가 이 값 이상이면 dead
@@ -291,12 +322,55 @@ def run_site(
                 if not detail.ok:
                     rep.detail_errors += 1
 
-            title = (detail.title if detail and detail.ok else None) or row.title
+            # list_title 우선 — detail <title> 이 사이트 공통 brand 인 경우
+            # (e.g. mofa.go.kr "워킹홀리데이인포센터 | 재외동포청") 가 흔함.
+            # list_title 이 비어있을 때만 detail.title 로 fallback.
+            title = row.title or (detail.title if detail and detail.ok else None)
+            title = _clean_title(title)
             raw = {
                 "list_title": row.title,
                 "detail_url": row.detail_url,
-                "snippet": detail.raw_text_snippet if detail and detail.ok else None,
             }
+            if detail and detail.ok:
+                from ..infra.media_store import download as _media_dl
+
+                images_stored = []
+                for u in detail.images:
+                    s = _media_dl(u, site_id, referer=row.detail_url)
+                    images_stored.append(s.to_dict())
+                attachments_stored = []
+                for a in detail.attachments:
+                    s = _media_dl(a["url"], site_id, referer=row.detail_url)
+                    d = s.to_dict()
+                    d["text"] = a.get("text", "")
+                    d["ext_orig"] = a.get("ext", "")
+                    attachments_stored.append(d)
+
+                body_html_local = detail.body_html or ""
+                if body_html_local:
+                    for img in images_stored:
+                        if img.get("local_path") and img.get("src"):
+                            body_html_local = body_html_local.replace(
+                                img["src"], "/" + img["local_path"]
+                            )
+
+                raw.update({
+                    "snippet": detail.raw_text_snippet,
+                    "body_html": detail.body_html,
+                    "body_html_local": body_html_local,
+                    "images": images_stored,
+                    "links": detail.links,
+                    "attachments": attachments_stored,
+                    "iframes": detail.iframes,
+                    "videos": detail.videos,
+                    "emails": detail.emails,
+                    "phones": detail.phones,
+                    "tables": detail.tables,
+                    "meta": detail.meta,
+                    "jsonld": detail.jsonld,
+                })
+            else:
+                raw["snippet"] = None
             insert_job(
                 site_id=site_id,
                 external_id=ext_id,

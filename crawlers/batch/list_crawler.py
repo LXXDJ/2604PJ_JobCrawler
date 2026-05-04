@@ -24,6 +24,7 @@ from ..fetchers.static import fetch as fetch_static, make_session as _make_sessi
 
 
 PAGINATION_PARAMS = ["pageIndex", "currentPage", "page", "pageNum", "pageNo",
+                     "pagenumber", "page_no", "page_num", "pageno", "pagenum",
                      "cpage", "startPage", "p", "p_page"]
 MAX_PAGES = 1000                  # 안전장치 (페이지 끝나면 자동 break — 정상 사이트는
                                   # break 조건으로 조기 종료. 대형 사이트 cap 만 의미)

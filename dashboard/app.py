@@ -15,8 +15,12 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import base64
+import mimetypes
+
 from crawlers.batch.runner import run_site
 from crawlers.infra.db import get_conn, init_db
+from crawlers.infra.media_store import absolute_path as _media_abs
 from crawlers.infra.sites_repo import list_sites, update_status
 from crawlers.registration.register import register
 
@@ -94,7 +98,7 @@ def _df_sites() -> pd.DataFrame:
 
 def _df_jobs(site_id: str | None = None, limit: int = 200) -> pd.DataFrame:
     sql = """
-        SELECT id, site_id, external_id, title, url,
+        SELECT id, site_id, external_id, title, url, raw,
                first_seen_at, last_seen_at, closed_at
           FROM jobs
     """
@@ -107,6 +111,52 @@ def _df_jobs(site_id: str | None = None, limit: int = 200) -> pd.DataFrame:
     with get_conn() as conn:
         rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
     return _to_kst(pd.DataFrame(rows))
+
+
+def _parse_raw(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        d = json.loads(raw)
+        return d if isinstance(d, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+@st.cache_data(show_spinner=False)
+def _read_media_data_uri(rel_path: str) -> str | None:
+    """로컬 미디어 파일을 data: URI 로 인코딩 (iframe 안에서 렌더용)."""
+    try:
+        p = _media_abs(rel_path)
+        if not p.exists():
+            return None
+        ct, _ = mimetypes.guess_type(p.name)
+        ct = ct or "application/octet-stream"
+        b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+        return f"data:{ct};base64,{b64}"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _embed_local_in_html(body_html: str, images: list) -> str:
+    """body_html 안의 `/data/media/...` 참조를 data URI 로 치환."""
+    if not body_html:
+        return body_html
+    out = body_html
+    for img in images or []:
+        if not isinstance(img, dict):
+            continue
+        local = img.get("local_path")
+        src = img.get("src")
+        if not local:
+            continue
+        data_uri = _read_media_data_uri(local)
+        if not data_uri:
+            continue
+        out = out.replace("/" + local, data_uri)
+        if src:
+            out = out.replace(src, data_uri)
+    return out
 
 
 def _df_runs(site_id: str | None = None, limit: int = 50) -> pd.DataFrame:
@@ -279,8 +329,150 @@ with tab_jobs:
     if df_jobs.empty:
         st.info("공고 없음")
     else:
-        st.caption(f"{len(df_jobs)} rows (open + closed 모두)")
-        st.dataframe(df_jobs, use_container_width=True, hide_index=True)
+        st.caption(f"{len(df_jobs)} rows (open + closed 모두) — 행 클릭 시 본문 표시")
+        df_view = df_jobs.drop(columns=["raw"])
+        evt = st.dataframe(
+            df_view,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="jobs_table",
+        )
+        sel_rows = getattr(evt, "selection", {}).get("rows", []) if evt else []
+        if sel_rows:
+            row = df_jobs.iloc[sel_rows[0]]
+            raw = _parse_raw(row.get("raw"))
+            st.subheader(row["title"] or "(제목 없음)")
+            meta_cols = st.columns(3)
+            meta_cols[0].caption(f"site: {row['site_id']}")
+            meta_cols[1].caption(f"first_seen: {row['first_seen_at']}")
+            meta_cols[2].caption(
+                f"closed: {row['closed_at']}" if row["closed_at"] else "open"
+            )
+            if row.get("url"):
+                st.markdown(f"🔗 [원문 보기]({row['url']})")
+            images = raw.get("images") or []
+            attachments = raw.get("attachments") or []
+
+            body_html_raw = raw.get("body_html_local") or raw.get("body_html") or ""
+            body_text = (raw.get("body") or raw.get("description")
+                         or raw.get("snippet") or "")
+            if body_html_raw:
+                body_html_render = _embed_local_in_html(body_html_raw, images)
+                st.markdown("**본문 (HTML)**")
+                st.components.v1.html(body_html_render, height=600, scrolling=True)
+            elif body_text:
+                st.markdown("**본문**")
+                st.write(body_text)
+            else:
+                st.caption("(본문 없음 — detail 미수집)")
+
+            if images:
+                with st.expander(f"이미지 ({len(images)})"):
+                    cols = st.columns(min(3, len(images)))
+                    for i, img in enumerate(images[:9]):
+                        if isinstance(img, dict):
+                            local = img.get("local_path")
+                            src = img.get("src")
+                        else:
+                            local, src = None, img
+                        if local:
+                            p = _media_abs(local)
+                            if p.exists():
+                                cols[i % len(cols)].image(
+                                    str(p), use_container_width=True,
+                                    caption=f"{img.get('size',0)//1024} KB"
+                                    if isinstance(img, dict) else None,
+                                )
+                                continue
+                        cols[i % len(cols)].markdown(
+                            f'<a href="{src}" target="_blank">'
+                            f'<img src="{src}" style="width:100%;border:1px solid #ddd"/></a>',
+                            unsafe_allow_html=True,
+                        )
+                    if len(images) > 9:
+                        st.caption(f"... +{len(images) - 9} 더 있음 (raw JSON 참고)")
+
+            if attachments:
+                st.markdown(f"**첨부 파일 ({len(attachments)})**")
+                for a in attachments:
+                    if not isinstance(a, dict):
+                        continue
+                    label = a.get("text") or a.get("src") or ""
+                    ext = a.get("ext_orig") or a.get("ext") or ""
+                    local = a.get("local_path")
+                    if local and _media_abs(local).exists():
+                        size_kb = (a.get("size") or 0) // 1024
+                        st.markdown(
+                            f"- {label}  `.{ext}` ({size_kb} KB) — "
+                            f"[원문]({a.get('src','')})"
+                        )
+                        with open(_media_abs(local), "rb") as f:
+                            st.download_button(
+                                label=f"📥 {Path(local).name}",
+                                data=f.read(),
+                                file_name=Path(local).name,
+                                key=f"dl_{a.get('sha256', label)}",
+                            )
+                    else:
+                        err = a.get("error") or "(미다운로드)"
+                        st.markdown(
+                            f"- [{label}]({a.get('src','')}) `.{ext}` — {err}"
+                        )
+
+            iframes = raw.get("iframes") or []
+            videos = raw.get("videos") or []
+            if iframes or videos:
+                with st.expander(f"임베드 ({len(iframes)} iframe / {len(videos)} video)"):
+                    for u in iframes:
+                        st.markdown(f"- iframe: {u}")
+                    for u in videos:
+                        st.markdown(f"- video: {u}")
+                        try:
+                            st.video(u)
+                        except Exception:  # noqa: BLE001
+                            pass
+
+            tables = raw.get("tables") or []
+            if tables:
+                with st.expander(f"표 ({len(tables)})"):
+                    for i, tbl in enumerate(tables, 1):
+                        st.caption(f"table {i}")
+                        try:
+                            st.dataframe(pd.DataFrame(tbl), use_container_width=True,
+                                         hide_index=True)
+                        except Exception:  # noqa: BLE001
+                            st.write(tbl)
+
+            emails = raw.get("emails") or []
+            phones = raw.get("phones") or []
+            if emails or phones:
+                cc = st.columns(2)
+                if emails:
+                    cc[0].markdown("**이메일**\n" + "\n".join(f"- {e}" for e in emails))
+                if phones:
+                    cc[1].markdown("**전화**\n" + "\n".join(f"- {p}" for p in phones))
+
+            links = raw.get("links") or []
+            if links:
+                with st.expander(f"본문 링크 ({len(links)})"):
+                    for ln in links:
+                        u = ln.get("url", "") if isinstance(ln, dict) else str(ln)
+                        t = ln.get("text", "") if isinstance(ln, dict) else ""
+                        st.markdown(f"- [{t or u}]({u})")
+
+            jsonld = raw.get("jsonld") or []
+            meta_dict = raw.get("meta") or {}
+            if jsonld:
+                with st.expander(f"JSON-LD ({len(jsonld)})"):
+                    st.json(jsonld)
+            if meta_dict:
+                with st.expander(f"meta tags ({len(meta_dict)})"):
+                    st.json(meta_dict)
+
+            with st.expander("raw JSON 전체"):
+                st.json(raw or {"_": "(empty)"})
 
 
 # ----- 크롤 이력 -----
