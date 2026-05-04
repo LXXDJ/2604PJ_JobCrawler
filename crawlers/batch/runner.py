@@ -48,13 +48,39 @@ class SiteRunReport:
         return self.site_name or self.site_id
 
 
+class ConcurrentRunError(RuntimeError):
+    """같은 site_id 의 다른 run 이 아직 진행 중일 때 발생."""
+
+
+_RUN_LOCK_STALE_MINUTES = 60  # 이 시간 넘게 ended_at NULL 이면 좀비로 간주, 락 무시
+
+
 def _start_run(site_id: str, kind: str = "batch") -> int:
+    """동일 site 의 진행 중 run 이 있으면 ConcurrentRunError.
+    BEGIN IMMEDIATE 로 race window 차단.
+    """
     with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        active = conn.execute(
+            """SELECT id, started_at FROM crawl_runs
+                WHERE site_id = ?
+                  AND ended_at IS NULL
+                  AND started_at >= datetime('now', ?)
+                ORDER BY id DESC LIMIT 1""",
+            (site_id, f"-{_RUN_LOCK_STALE_MINUTES} minutes"),
+        ).fetchone()
+        if active:
+            conn.rollback()
+            raise ConcurrentRunError(
+                f"site={site_id} 의 run id={active['id']} 진행 중 (started_at={active['started_at']})"
+            )
         cur = conn.execute(
             "INSERT INTO crawl_runs (site_id, kind) VALUES (?, ?)",
             (site_id, kind),
         )
-        return int(cur.lastrowid)
+        run_id = int(cur.lastrowid)
+        conn.commit()
+        return run_id
 
 
 def _finish_run(
@@ -127,7 +153,13 @@ def run_site(
         rep.error = "no sources"
         return rep
 
-    run_id = _start_run(site_id)
+    try:
+        run_id = _start_run(site_id)
+    except ConcurrentRunError as e:
+        rep.error = f"concurrent run 차단: {e}"
+        rep.consecutive_failures = site["consecutive_failures"]
+        rep.jobs_total = _count_jobs(site_id)
+        return rep
     already_seen = _existing_external_ids(site_id)  # DB 의 기존 공고 ID (cross-batch 증분)
     cross_source_seen: set[str] = set()  # 이번 batch 안에서 이전 source 가 본 detail_url
     any_source_ok = False
@@ -143,12 +175,13 @@ def run_site(
 
         if fetcher == "api" and src.get("api_schema"):
             from ..extractors.api_schema import ApiSchema
-            from ..fetchers.api import crawl_api
+            from ..fetchers.api import MAX_PAGES, crawl_api
             schema = ApiSchema.from_dict(src["api_schema"])
             api_res = crawl_api(
                 schema,
                 already_seen_ids=already_seen,
                 use_proxy=bool(src.get("use_proxy")),
+                max_pages=int(src.get("max_pages") or MAX_PAGES),
             )
             if not api_res.ok:
                 error_msgs.append(f"{url}: {api_res.error}")
@@ -215,8 +248,10 @@ def run_site(
                 continue
 
             detail = None
-            # naver_cafe 는 detail 페이지가 SPA — 별도 API 필요. 현재는 list 의 subject 로 충분.
-            if fetch_details and fetcher != "naver_cafe":
+            # SPA 라 detail HTML 이 의미 없는 사이트는 skip_detail=True (heykorean 등) 로 표시.
+            # naver_cafe 는 어댑터 자체가 detail 없음.
+            skip_detail = bool(src.get("skip_detail")) or fetcher == "naver_cafe"
+            if fetch_details and not skip_detail:
                 detail = fetch_detail(row.detail_url)
                 if not detail.ok:
                     rep.detail_errors += 1
