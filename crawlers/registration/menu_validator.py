@@ -276,7 +276,14 @@ def _pick_passing(html: str, base_url: str, source_url: str | None = None) -> Li
     return max(passing, key=lambda e: e.count)
 
 
-def validate(url: str, *, timeout: int = 20) -> ValidationResult:
+def validate(url: str, *, timeout: int = 20, total_timeout: int = 90) -> ValidationResult:
+    """URL 1개 검증.
+    total_timeout: 전체 fallback 체인 (static → dynamic → proxy×10) 의 wall-clock 상한.
+    개별 fetch 의 timeout 합산이 분 단위로 누적되는 것을 방지 (gwork 류 hang 사이트 보호).
+    """
+    import time as _time
+    _deadline = _time.time() + total_timeout
+
     # 1차: 정적 fetch — 통과하는 후보 컨테이너 우선 탐색
     r = fetch_static(url, timeout=timeout)
     fetcher_used = "static"
@@ -290,7 +297,7 @@ def validate(url: str, *, timeout: int = 20) -> ValidationResult:
         ext = None
 
     # 정적 결과가 검증을 통과 못 하면 동적 fallback (Network 캡처 켜기)
-    if not _passes_thresholds(ext, url):
+    if not _passes_thresholds(ext, url) and _time.time() < _deadline:
         from ..fetchers.dynamic import fetch as fetch_dynamic
         from ..extractors.api_schema import detect_schema, get_at_path
         rd = fetch_dynamic(url, capture_api=True)
@@ -346,10 +353,12 @@ def validate(url: str, *, timeout: int = 20) -> ValidationResult:
     # 우선순위 4) proxy 풀 fallback — anti-scraping 강해서 IP 차단 (슈퍼루키 류)
     # static / dynamic 모두 403 등 거부일 때 proxy 회전으로 시도.
     # SPA 일 가능성 → static 1회 + dynamic+proxy 1회 시도.
-    if not _passes_thresholds(ext, url):
+    if not _passes_thresholds(ext, url) and _time.time() < _deadline:
         from ..infra.config import PROXIES
         from ..fetchers.dynamic import fetch as fetch_dynamic2
         for proxy in PROXIES:
+            if _time.time() >= _deadline:
+                break
             # 4a) static + proxy
             rp = fetch_static(url, timeout=timeout, proxy=proxy)
             if rp.ok:

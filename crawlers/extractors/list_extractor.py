@@ -69,6 +69,26 @@ _JS_ID_RE = re.compile(
     r"^javascript:\s*([A-Za-z_][\w$]*)\s*\(\s*['\"]([^'\"]+)['\"]"
 )
 
+# onclick 에서 fn('ID') 패턴 추출. JSP 정부사이트 흔한 pattern:
+#   <a href="#" onclick="javascript:goView('35261');">
+_ONCLICK_FN_RE = re.compile(
+    r"(?:javascript:\s*)?([A-Za-z_][\w$]*)\s*\(\s*['\"]([^'\"]+)['\"]"
+)
+
+
+def _effective_href(a: Tag) -> str:
+    """href 가 '#' 또는 비어있을 때 onclick 에서 fn('ID') 추출해 javascript: 형태로 변환.
+    그 외 경우는 원래 href 반환."""
+    href = (a.get("href") or "").strip()
+    if href and href != "#" and not href.startswith("javascript:void"):
+        return href
+    onclick = (a.get("onclick") or "").strip()
+    if onclick:
+        m = _ONCLICK_FN_RE.search(onclick)
+        if m:
+            return f"javascript:{m.group(1)}('{m.group(2)}')"
+    return href
+
 
 def _abs(base: str, href: str) -> Optional[str]:
     if not href:
@@ -83,6 +103,11 @@ def _abs(base: str, href: str) -> Optional[str]:
         # query 로 박는 이유: external_id 가 _jsid (id-suffix) 로 추출 가능.
         # base 의 다른 query 는 의도적으로 버림 — 페이지네이션 query (page/currentPage)
         # 가 섞이면 같은 ID 도 페이지마다 URL 이 달라져 dedupe 가 깨짐.
+        # unrecruit.mofa.go.kr 처럼 'javascript:javascript:goView(...)' 중복 prefix
+        # 가 들어간 케이스 — 모두 떼고 매치.
+        while href.startswith("javascript:"):
+            href = href[len("javascript:"):].lstrip()
+        href = "javascript:" + href
         m = _JS_ID_RE.match(href)
         if not m:
             return None
@@ -104,8 +129,9 @@ def _extract_subject(row: Tag, base_url: str) -> Optional[ExtractedRow]:
     """단일 row 만 보고 anchor 채택 — fallback 용 (longest text)."""
     best: Optional[ExtractedRow] = None
     best_len = 0
-    for a in row.find_all("a", href=True):
-        url = _abs(base_url, a["href"])
+    for a in row.find_all("a"):
+        href = _effective_href(a)
+        url = _abs(base_url, href)
         if not url:
             continue
         text = a.get_text(" ", strip=True)
@@ -153,14 +179,15 @@ def _pick_subjects_for_container(
     row_anchors: list[list[tuple[str, str, str]]] = []
     for row in rows:
         items: list[tuple[str, str, str]] = []
-        for a in row.find_all("a", href=True):
-            url = _abs(base_url, a["href"])
+        for a in row.find_all("a"):
+            href = _effective_href(a)
+            url = _abs(base_url, href)
             if not url:
                 continue
             text = a.get_text(" ", strip=True)
             if len(text) < MIN_LINK_TEXT_LEN:
                 continue
-            items.append((_anchor_fingerprint(a["href"]), url, text))
+            items.append((_anchor_fingerprint(href), url, text))
         row_anchors.append(items)
 
     # fingerprint 별 통계 — 각 fp 가 컨테이너 안에서 얼마나 unique 한지

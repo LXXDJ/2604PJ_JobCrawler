@@ -129,14 +129,20 @@ def register_naver_cafe(
 
     rep = CafeRegisterReport(home_url=home_url, site_id=slug, cafe_slug=slug)
 
+    # 등록 시작 — 신규 사이트면 pending 으로 즉시 표시 (기존 active 보존)
+    from ..infra.sites_repo import get_site
+    if get_site(slug) is None:
+        upsert_site(slug, home_url, name=name,
+                    status="pending", status_reason="registering...",
+                    sources=[])
+
     cafe_id, cafe_name = _resolve_cafe_id_and_name(slug)
     if not cafe_id:
         rep.final_status = "dead"
         rep.notes.append("cafe_id resolve failed (home fetch failed?)")
-        if not dry_run:
-            upsert_site(slug, home_url, name=name or cafe_name,
-                        status="dead", status_reason="cafe_id_not_found",
-                        sources=[])
+        upsert_site(slug, home_url, name=name or cafe_name,
+                    status="dead", status_reason="cafe_id_not_found",
+                    sources=[])
         return rep
     rep.cafe_id = cafe_id
     rep.cafe_name = cafe_name
@@ -145,10 +151,9 @@ def register_naver_cafe(
     if err or not menus:
         rep.final_status = "pending"
         rep.notes.append(f"menus api fail: {err or 'empty'}")
-        if not dry_run:
-            upsert_site(slug, home_url, name=name or cafe_name,
-                        status="pending", status_reason="menus_api_failed",
-                        sources=[])
+        upsert_site(slug, home_url, name=name or cafe_name,
+                    status="pending", status_reason="menus_api_failed",
+                    sources=[])
         return rep
 
     candidates = _filter_job_menus(menus)
@@ -158,10 +163,9 @@ def register_naver_cafe(
     if not candidates:
         rep.final_status = "pending"
         rep.notes.append("no job-related menus matched (regex)")
-        if not dry_run:
-            upsert_site(slug, home_url, name=name or cafe_name,
-                        status="pending", status_reason="no_job_menus",
-                        sources=[])
+        upsert_site(slug, home_url, name=name or cafe_name,
+                    status="pending", status_reason="no_job_menus",
+                    sources=[])
         return rep
 
     sources: list[dict] = []
@@ -179,10 +183,9 @@ def register_naver_cafe(
     if not sources:
         rep.final_status = "pending"
         rep.notes.append("all candidate menus empty")
-        if not dry_run:
-            upsert_site(slug, home_url, name=name or cafe_name,
-                        status="pending", status_reason="all_menus_empty",
-                        sources=[])
+        upsert_site(slug, home_url, name=name or cafe_name,
+                    status="pending", status_reason="all_menus_empty",
+                    sources=[])
         return rep
 
     rep.final_status = "active"

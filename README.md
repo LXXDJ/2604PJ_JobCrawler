@@ -153,49 +153,52 @@ python -m scripts.ops.install_schtask
 
 ---
 
-### 현재 등록된 사이트 매핑 (22개)
+### 현재 등록된 사이트 매핑 (24개)
 
-| site_id | 이름 | 단계 | 누적 jobs | 이유 |
+어려운 단계부터 정렬, 같은 단계는 누적 공고건수 DESC.
+
+| site_id | 이름 | 단계 | 누적 공고건수 | 이유 |
 |---|---|---|---|---|
-| **mofa** | 재외동포청 | **1단계** static | 10 | 정적 게시판. 공공 사이트라 정적 그대로 fetch 가능 |
-| **hanin** | 재캄보디아한인회 | **1단계** static | 14 | 평범한 PHP 게시판 (`bbs/board.php`), HTML 그대로 list 들어있음 |
-| **siemreap** | 재캄보디아시엠립한인회 | **1단계** static | 15 | 재캄보디아한인회와 같은 게시판 구조 (`?page=N` 무시 사이트지만 fetch 자체는 static) |
-| **jobposting** | 잡포스팅 | **1단계** static | 203 | 정적 HTML list. 단일 page 형태 |
-| **hrdkorea** | 한국산업인력공단 고용허가제 통합서비스 | **1단계** static | 580 | JSP `jobRecruit.do` 에 list HTML 그대로 — `currentPage=N` 페이지네이션만 학습 |
-| **peoplenjob** | 피플앤잡 | **1단계** static | 10,259 | 정적 HTML list (`/jobs`). 가장 많이 적재된 단일 사이트 |
+| **superookie** | 슈퍼루키 | **4단계** api + 프록시 회전 | 994 | 처음엔 dynamic+프록시였으나 Playwright capture_api 로 `/api/jobs/search?access_token=...` JSON endpoint 발견 → fetcher=api 로 강등. 프록시 풀 회전 + 무프록시 fallback. 자세한 경위는 §9 참고 |
+| **camhr** | CamHR | **4단계** api | 1,752 | XHR 응답이 JSON. `/a/job` endpoint + id/title 필드 자동 매칭. 배치는 JSON 페이지네이션으로 수집 |
+| **worldjob** | 월드잡플러스 | **3단계** xhr_html → static 으로 저장 | 518 | 메인 페이지는 SPA 라 정적 fetch 가 빈 shell. Playwright 로 띄워서 `getEpmtList.do` 라는 AJAX endpoint 가 list HTML 만 따로 반환하는 걸 발견 → 그 URL 을 source 로 저장하고 fetcher='static' 으로 둠 |
+| **unrecruit** | 외교부 | **2단계** dynamic | 1,647 | SPA 기반 — 정적 요청 시 빈 shell. 배치마다 Playwright 로 JS 렌더링 후 list 추출 |
 | **cambojob** | CamboJob | **2단계** dynamic | 610 | anti-scraping 대응 (path-segment 페이지네이션, Referer 검사, 세션 쿠키 필요). static 으로는 차단당해서 배치마다 Playwright 로 가야 함 |
-| **superookie** | 슈퍼루키 | **4단계** api + 프록시 회전 | 985 | 처음엔 dynamic+프록시였으나 Playwright capture_api 로 `/api/jobs/search?access_token=...` JSON endpoint 발견 → fetcher=api 로 강등. 프록시 풀 회전 + 무프록시 fallback. 자세한 경위는 §9 참고 |
-| **worldjob** | 월드잡플러스 | **3단계** xhr_html → static 으로 저장 | 602 | 메인 페이지는 SPA 라 정적 fetch 가 빈 shell. Playwright 로 띄워서 `getEpmtList.do` 라는 AJAX endpoint 가 list HTML 만 따로 반환하는 걸 발견 → 그 URL 을 source 로 저장하고 fetcher='static' 으로 둠 |
-| **camhr** | CamHR | **4단계** api | 1,742 | XHR 응답이 JSON. `/a/job` endpoint + id/title 필드 자동 매칭. 배치는 JSON 페이지네이션으로 수집 |
-| **kotrasingapore** | KOTRA 싱가포르 | **특수** naver_cafe | 36 | 네이버 카페 채용게시판 전용 fetcher. 카페 메뉴 단위로 source 등록 |
-| **kotravancouver** | KOTRA 캐나다 | **특수** naver_cafe | 189 | 카페 채용게시판 |
-| **kotranewyork** | KOTRA 미국 | **특수** naver_cafe | 271 | 카페 채용게시판 |
-| **kotradubai** | KOTRA 중동 | **특수** naver_cafe | 282 | 카페 채용게시판 |
-| **kotrakualalumpur** | KOTRA 말레이시아 | **특수** naver_cafe | 447 | 카페 채용게시판 |
-| **kotranewdelhi** | KOTRA 인도 | **특수** naver_cafe | 713 | 카페 채용게시판 |
-| **kotramexico** | KOTRA 중남미 | **특수** naver_cafe | 791 | 카페 채용게시판 |
-| **kotrahamburg** | KOTRA 유럽 | **특수** naver_cafe | 806 | 카페 채용게시판 |
-| **kotrasydney** | KOTRA 호주·뉴질랜드 | **특수** naver_cafe | 1,033 | 카페 채용게시판 |
-| **kotrabeijing** | KOTRA 중국 | **특수** naver_cafe | 1,183 | 카페 채용게시판 |
-| **kotratokyo** | KOTRA 일본 | **특수** naver_cafe | 1,265 | 카페 채용게시판 |
-| **kotrajakarta1** | KOTRA 인도네시아 | **특수** naver_cafe | 1,366 | 카페 채용게시판 |
 | **kotrahochiminh** | KOTRA 호치민 | **특수** naver_cafe | 3,391 | 카페 채용게시판. KOTRA 13개 중 누적 최다 |
+| **kotrajakarta1** | KOTRA 인도네시아 | **특수** naver_cafe | 1,366 | 카페 채용게시판 |
+| **kotrabeijing** | KOTRA 중국 | **특수** naver_cafe | 1,183 | 카페 채용게시판 |
+| **kotratokyo** | KOTRA 일본 | **특수** naver_cafe | 1,065 | 카페 채용게시판 |
+| **kotrasydney** | KOTRA 호주·뉴질랜드 | **특수** naver_cafe | 1,033 | 카페 채용게시판 |
+| **kotrahamburg** | KOTRA 유럽 | **특수** naver_cafe | 806 | 카페 채용게시판 |
+| **kotramexico** | KOTRA 중남미 | **특수** naver_cafe | 791 | 카페 채용게시판 |
+| **kotranewdelhi** | KOTRA 인도 | **특수** naver_cafe | 713 | 카페 채용게시판 |
+| **kotrakualalumpur** | KOTRA 말레이시아 | **특수** naver_cafe | 447 | 카페 채용게시판 |
+| **kotradubai** | KOTRA 중동 | **특수** naver_cafe | 282 | 카페 채용게시판 |
+| **kotranewyork** | KOTRA 미국 | **특수** naver_cafe | 195 | 카페 채용게시판 |
+| **kotravancouver** | KOTRA 캐나다 | **특수** naver_cafe | 132 | 카페 채용게시판 |
+| **kotrasingapore** | KOTRA 싱가포르 | **특수** naver_cafe | 36 | 네이버 카페 채용게시판 전용 fetcher. 카페 메뉴 단위로 source 등록 |
+| **peoplenjob** | 피플앤잡 | **1단계** static | 10,630 | 정적 HTML list (`/jobs`). 가장 많이 적재된 단일 사이트 |
+| **hrdkorea** | 한국산업인력공단 고용허가제 통합서비스 | **1단계** static | 580 | JSP `jobRecruit.do` 에 list HTML 그대로 — `currentPage=N` 페이지네이션만 학습 |
+| **jobposting** | 잡포스팅 | **1단계** static | 203 | 정적 HTML list. 단일 page 형태 |
+| **siemreap** | 재캄보디아시엠립한인회 | **1단계** static | 15 | 재캄보디아한인회와 같은 게시판 구조 (`?page=N` 무시 사이트지만 fetch 자체는 static) |
+| **hanin** | 재캄보디아한인회 | **1단계** static | 14 | 평범한 PHP 게시판 (`bbs/board.php`), HTML 그대로 list 들어있음 |
+| **mofa** | 재외동포청 | **1단계** static | 10 | 정적 게시판. 공공 사이트라 정적 그대로 fetch 가능 |
 
 ---
 
 ### 비용 분포 정리
 
 ```
-1단계 (static)         mofa, hanin, siemreap, jobposting, hrdkorea, peoplenjob   ← 가장 가벼움
-3단계 (→ static 저장)  worldjob                                                  ← 등록만 비쌌고 배치는 1단계급
-4단계 (api)            camhr                                                     ← 배치는 가벼운 JSON GET
 4단계 + 프록시 회전     superookie                                                ← API 강등 후. 프록시 트래픽만 추가 비용
-특수 (naver_cafe)      KOTRA 13개 (싱가포르·캐나다·미국·중동·말레이시아·인도·    ← 카페 전용, 가벼움
-                       중남미·유럽·호주·중국·일본·인도네시아·호치민)
-2단계 (dynamic)        cambojob                                                  ← 배치마다 매번 Playwright (가장 비쌈)
+4단계 (api)            camhr                                                     ← 배치는 가벼운 JSON GET
+3단계 (→ static 저장)  worldjob                                                  ← 등록만 비쌌고 배치는 1단계급
+2단계 (dynamic)        unrecruit, cambojob                                       ← 배치마다 매번 Playwright (가장 비쌈)
+특수 (naver_cafe)      KOTRA 13개 (호치민·인도네시아·중국·일본·호주·유럽·       ← 카페 전용, 가벼움
+                       중남미·인도·말레이시아·중동·미국·캐나다·싱가포르)
+1단계 (static)         peoplenjob, hrdkorea, jobposting, siemreap, hanin, mofa  ← 가장 가벼움
 ```
 
-**관찰**: 22개 사이트 중 21개가 가벼운 fetcher (1·3·4단계 + naver_cafe) 로 안착. 마지막 1개 cambojob 만 dynamic 에 머물러 있어 배치 비용이 큼 — anti-scraping (path-segment 페이지네이션, Referer 검사, 세션 쿠키) 때문에 어쩔 수 없는 케이스. peoplenjob 은 가장 많은 10,259건을 1단계 static 으로 가져오고 있어 효율 최고. KOTRA 카페 13개는 합쳐서 12,573건으로 단일 사이트 peoplenjob 다음으로 큰 풀.
+**관찰**: 24개 사이트 중 22개가 가벼운 fetcher (1·3·4단계 + naver_cafe) 로 안착. 2단계 dynamic 은 unrecruit·cambojob 둘 — unrecruit 는 SPA 자체가 dynamic 강요, cambojob 은 anti-scraping (path-segment 페이지네이션, Referer 검사, 세션 쿠키) 때문에 어쩔 수 없는 케이스. peoplenjob 은 가장 많은 10,630건을 1단계 static 으로 가져오고 있어 효율 최고. KOTRA 카페 13개는 합쳐서 11,440건으로 단일 사이트 peoplenjob 다음으로 큰 풀.
 
 ---
 

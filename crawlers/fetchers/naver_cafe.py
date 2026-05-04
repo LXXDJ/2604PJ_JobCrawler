@@ -125,21 +125,23 @@ def crawl_cafe(
             if aid in seen_ids_in_run:
                 continue
             seen_ids_in_run.add(aid)
+            if aid in seen:
+                # 이미 DB 에 있는 글 — yield 안 함 (중복 적재 방지)
+                seen_count += 1
+                continue
             title = (it.get("subject") or "").strip()
             if not title:
                 continue
             row = ExtractedRow(detail_url=_detail_url(cafe_id, aid), title=title[:200])
             result.rows.append(row)
             new_count += 1
-            if aid in seen:
-                seen_count += 1
 
         result.pages_crawled = page
         log(f"    page {page}: total={len(items)} new={new_count} already_seen={seen_count}")
 
-        # 모두 already_seen 이고 페이지가 가득 찼으면 더 안 나옴 (증분 종료)
-        if new_count > 0 and seen_count == new_count and len(items) >= PAGE_SIZE:
-            log(f"    break: page {page} 모든 글이 이미 봤음")
+        # 새 글 0 이고 already_seen 이 있으면 — 이 페이지는 모두 기존 글, 증분 종료
+        if new_count == 0 and seen_count > 0:
+            log(f"    break: page {page} 신규 글 없음 (모두 기존 글)")
             break
         # 페이지가 안 차면 마지막
         if len(items) < PAGE_SIZE:

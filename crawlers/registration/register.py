@@ -129,6 +129,16 @@ def register(
     site_id = extract_site_id(home_url)
     rep = RegisterReport(home_url=home_url, site_id=site_id, final_status="pending")
 
+    # 등록 시작 — 신규 사이트면 pending 으로 즉시 표시 (dashboard 가시화).
+    # 기존 active 사이트 재등록 시 sources 를 날리지 않기 위해 신규일 때만 insert.
+    from ..infra.sites_repo import get_site
+    if get_site(site_id) is None:
+        upsert_site(
+            site_id, home_url, name=name,
+            status="pending", status_reason="registering...",
+            sources=[],
+        )
+
     # 1. discover
     d = discover(home_url, depth1_top_n=5)
     rep.discovery = d
@@ -141,23 +151,21 @@ def register(
     if not d.ok:
         rep.final_status = "dead"
         rep.notes.append(f"home fetch failed: {d.error}")
-        if not dry_run:
-            upsert_site(
-                site_id, home_url, name=name,
-                status="dead", status_reason=f"home fetch failed: {d.error}",
-                sources=[],
-            )
+        upsert_site(
+            site_id, home_url, name=name,
+            status="dead", status_reason=f"home fetch failed: {d.error}",
+            sources=[],
+        )
         return rep
 
     if not d.candidates:
         rep.final_status = "pending"
         rep.notes.append("no menu candidates discovered")
-        if not dry_run:
-            upsert_site(
-                site_id, home_url, name=name,
-                status="pending", status_reason="no_menu_candidates",
-                sources=[],
-            )
+        upsert_site(
+            site_id, home_url, name=name,
+            status="pending", status_reason="no_menu_candidates",
+            sources=[],
+        )
         return rep
 
     # 2. classify — score >= MIN_SCORE 인 모든 후보를 분류 (top_n 은 안전 상한)
@@ -198,12 +206,11 @@ def register(
         rep.notes.append(
             f"validation: 0 passed (full={len(full_urls)}, filtered={len(filt_urls)})"
         )
-        if not dry_run:
-            upsert_site(
-                site_id, home_url, name=name,
-                status="pending", status_reason="validation_failed",
-                sources=[],
-            )
+        upsert_site(
+            site_id, home_url, name=name,
+            status="pending", status_reason="validation_failed",
+            sources=[],
+        )
         return rep
 
     # 4. dedupe

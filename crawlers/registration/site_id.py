@@ -67,8 +67,13 @@ def extract_site_id(url: str) -> str:
 
     # ccTLD: SLD (rightmost) 가 등록 브랜드. 'www' 만 떼고 가장 오른쪽 채택.
     if is_cctld:
-        labels = [x for x in labels if x not in _SKIP_LABELS] or labels
-        return labels[-1] if labels else (parts[-3] if len(parts) >= 3 else parts[0])
+        cleaned = [x for x in labels if x not in _SKIP_LABELS] or labels
+        # go.kr (정부): 한 부처(SLD)가 다수 독립 사이트 운영 → leftmost 채택
+        # 예: whic.mofa.go.kr → whic, unrecruit.mofa.go.kr → unrecruit
+        # 단 SLD 자체뿐 (mofa.go.kr) 이면 SLD 사용
+        if ".".join(parts[-2:]) == "go.kr" and len(cleaned) >= 2:
+            return cleaned[0]
+        return cleaned[-1] if cleaned else (parts[-3] if len(parts) >= 3 else parts[0])
 
     # 일반 TLD: 보일러 라벨 skip 후 leftmost.
     # 전부 skip 되면 SLD (orig rightmost) 로 fallback.

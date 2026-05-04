@@ -45,11 +45,25 @@ def _df_sites() -> pd.DataFrame:
     if not sites:
         return pd.DataFrame()
 
-    # 사이트별 누적 공고 수
     with get_conn() as conn:
+        # 사이트별 누적 공고 수
         counts = {
             r["site_id"]: int(r["jobs_total"]) for r in conn.execute(
                 "SELECT site_id, COUNT(*) AS jobs_total FROM jobs GROUP BY site_id"
+            ).fetchall()
+        }
+        # 사이트별 최근 종료된 batch run 의 신규 공고 수 (정렬 기준)
+        last_added = {
+            r["site_id"]: int(r["jobs_added"] or 0) for r in conn.execute(
+                """
+                SELECT site_id, jobs_added
+                  FROM crawl_runs
+                 WHERE id IN (
+                       SELECT MAX(id) FROM crawl_runs
+                        WHERE ended_at IS NOT NULL
+                        GROUP BY site_id
+                 )
+                """
             ).fetchall()
         }
 
@@ -59,6 +73,7 @@ def _df_sites() -> pd.DataFrame:
             "name": s.get("name") or "",
             "site_id": s["id"],
             "status": s["status"],
+            "last_added": last_added.get(s["id"], 0),
             "home_url": s["home_url"],
             "sources": len(s.get("sources") or []),
             "jobs_total": counts.get(s["id"], 0),
@@ -67,7 +82,14 @@ def _df_sites() -> pd.DataFrame:
             "last_attempt_at": s["last_attempt_at"] or "",
             "status_reason": s["status_reason"] or "",
         })
-    return _to_kst(pd.DataFrame(rows))
+    df = pd.DataFrame(rows)
+    # 정렬: status (active/pending/paused 먼저, dead 마지막) → last_added desc
+    _status_rank = {"active": 0, "pending": 1, "paused": 2, "dead": 3}
+    df["_rank"] = df["status"].map(_status_rank).fillna(9).astype(int)
+    df = (df.sort_values(by=["_rank", "last_added"], ascending=[True, False], kind="stable")
+            .drop(columns=["_rank"])
+            .reset_index(drop=True))
+    return _to_kst(df)
 
 
 def _df_jobs(site_id: str | None = None, limit: int = 200) -> pd.DataFrame:

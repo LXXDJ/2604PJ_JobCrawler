@@ -216,6 +216,41 @@ def run_site(
             rows_to_process = cafe_res.rows
             log(f"  [{site_id}]   naver_cafe {cafe_res.pages_crawled} pages, "
                 f"{len(cafe_res.rows)} rows")
+        elif fetcher == "wordpress":
+            from ..fetchers.wordpress import crawl_rest_categories, crawl_kboard_sitemap
+            mode = src.get("mode")
+            base = src.get("base_url") or url
+            if mode == "rest_categories":
+                cid = src.get("category_id")
+                if cid is None:
+                    error_msgs.append(f"{url}: category_id missing")
+                    log(f"  [{site_id}]   wordpress meta missing (category_id)")
+                    continue
+                wp_res = crawl_rest_categories(
+                    base, cid, already_seen_ids=already_seen, progress_cb=log,
+                )
+            elif mode == "kboard_sitemap":
+                sitemaps = src.get("sitemaps") or []
+                if not sitemaps:
+                    error_msgs.append(f"{url}: sitemaps missing")
+                    log(f"  [{site_id}]   wordpress meta missing (sitemaps)")
+                    continue
+                wp_res = crawl_kboard_sitemap(
+                    base, sitemaps, already_seen_ids=already_seen, progress_cb=log,
+                )
+            else:
+                error_msgs.append(f"{url}: unknown wordpress mode={mode}")
+                log(f"  [{site_id}]   wordpress unknown mode: {mode}")
+                continue
+            if not wp_res.ok:
+                error_msgs.append(f"{url}: {wp_res.error}")
+                rep.notes.append(f"wordpress fail: {url} ({wp_res.error})")
+                log(f"  [{site_id}]   wordpress fail: {wp_res.error}")
+                continue
+            any_source_ok = True
+            rep.rows_seen += len(wp_res.rows)
+            rows_to_process = wp_res.rows
+            log(f"  [{site_id}]   wordpress {mode} pages={wp_res.pages_crawled} rows={len(wp_res.rows)}")
         else:
             listing = crawl_list(
                 url,
