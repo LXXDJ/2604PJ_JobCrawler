@@ -30,6 +30,12 @@ class ApiSchema:
     size_param: Optional[str] = "size"
     page_size: int = 50
     detail_url_template: Optional[str] = None  # 예: https://www.camhr.com/a/job/{id}
+    # detail JSON API (있으면 SPA 사이트도 본문 수집 가능)
+    detail_api_url_template: Optional[str] = None  # 예: https://api.camhr.com/v1.0.0/jobs/{id}
+    detail_path: Optional[str] = None  # 예: 'data' — JSON 안 detail object 위치
+    detail_content_field: Optional[str] = None  # body text 필드 (e.g. 'description')
+    detail_html_field: Optional[str] = None  # body HTML 필드 (e.g. 'contentHtml')
+    detail_title_field: Optional[str] = None  # detail 의 진짜 title (없으면 list title 사용)
 
     def to_dict(self) -> dict:
         return {
@@ -42,6 +48,11 @@ class ApiSchema:
             "size_param": self.size_param,
             "page_size": self.page_size,
             "detail_url_template": self.detail_url_template,
+            "detail_api_url_template": self.detail_api_url_template,
+            "detail_path": self.detail_path,
+            "detail_content_field": self.detail_content_field,
+            "detail_html_field": self.detail_html_field,
+            "detail_title_field": self.detail_title_field,
         }
 
     @classmethod

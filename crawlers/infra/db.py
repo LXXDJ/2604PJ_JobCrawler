@@ -25,6 +25,8 @@ CREATE TABLE IF NOT EXISTS sites (
 
     redirect_to           TEXT,
 
+    target_jobs           INTEGER,    -- 사이트가 광고하는 누적 공고 건수 (수집 목표)
+
     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -134,12 +136,23 @@ def _migrate_jobs_drop_unique(conn: sqlite3.Connection) -> bool:
     return True
 
 
+def _migrate_add_target_jobs(conn: sqlite3.Connection) -> bool:
+    """기존 sites 테이블에 target_jobs 컬럼 없으면 ALTER 로 추가."""
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(sites)")]
+    if "target_jobs" in cols:
+        return False
+    conn.execute("ALTER TABLE sites ADD COLUMN target_jobs INTEGER")
+    return True
+
+
 def init_db(db_path: Path = DB_PATH) -> None:
     with get_conn(db_path) as conn:
         conn.executescript(SCHEMA)
         # 기존 DB 의 UNIQUE 제약 제거 (마이그레이션)
         if _migrate_jobs_drop_unique(conn):
             print("[migration] jobs UNIQUE(site_id, external_id) 제거됨")
+        if _migrate_add_target_jobs(conn):
+            print("[migration] sites.target_jobs 컬럼 추가됨")
 
 
 if __name__ == "__main__":

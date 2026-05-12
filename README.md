@@ -117,6 +117,8 @@ python -m scripts.db.recent_runs     # 최근 배치 결과
 
 # 대시보드
 streamlit run dashboard/app.py
+# 또는 streamlit 이 PATH 에 안 잡힐 때:
+python -m streamlit run dashboard/app.py
 
 # 사이트가 등록 실패할 때 까보기
 python -m scripts.debug.dry_register <url>

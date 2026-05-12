@@ -103,12 +103,22 @@ _ID_LIKE_PARAMS = {
 
 
 def _is_sort_or_pagination_only(url: str) -> bool:
-    """URL query 가 sort/pagination 파라미터들로만 구성되어 있고 id-like 가 없으면 True.
-    헤더의 정렬 link, 페이지네이션 link 등을 detail row 로 오인하지 않기 위함.
+    """URL query 가 sort/pagination 파라미터들로만 구성되어 있고 id-like 가 없으며
+    path 가 list 페이지처럼 보이면 True. 헤더의 정렬 link, 페이지네이션 link 등을
+    detail row 로 오인하지 않기 위함.
+
+    예외: path 의 마지막 segment 가 숫자(또는 ID 형태) 이면 detail URL 로 취급.
+    예: /jobs/6196864?page=2 — path 끝이 ID 라 detail. query 의 page 무시.
     """
     from urllib.parse import urlparse, parse_qs
     p = urlparse(url)
     if not p.query:
+        return False
+    # path 의 마지막 segment 가 ID-like (숫자 또는 영숫자 ID) 이면 detail URL
+    last_seg = p.path.rstrip("/").rsplit("/", 1)[-1]
+    if last_seg and (last_seg.isdigit() or
+                     (len(last_seg) >= 8 and any(c.isdigit() for c in last_seg)
+                      and not last_seg.endswith((".jsp", ".php", ".do", ".html", ".htm", ".asp")))):
         return False
     qs = parse_qs(p.query, keep_blank_values=True)
     keys = set(qs.keys())
@@ -189,7 +199,8 @@ def _anchor_fingerprint(href: str) -> str:
 
 
 def _pick_subjects_for_container(
-    rows: list[Tag], base_url: str
+    rows: list[Tag], base_url: str, *,
+    prefix_hint: Optional[str] = None,
 ) -> list[Optional[ExtractedRow]]:
     """컨테이너 내 row 들의 anchor 분포를 분석해서 row 별 detail anchor 채택.
 
@@ -197,6 +208,10 @@ def _pick_subjects_for_container(
     + 채용공고 anchor (`goView1`) 둘 다 갖는 worldjob 케이스 처리.
     회사 popup 은 컨테이너 전체에서 ID 가 회사 단위 (중복 多), 채용공고 anchor 는
     row 별 unique. 후자 우선 채택.
+
+    prefix_hint: 이전 페이지에서 학습된 detail URL prefix. 있으면 prefix 매치
+    anchor 우선 채택 (peoplenjob 처럼 row 안에 여러 anchor 있고 첫 anchor 가
+    회사 link 인 경우 page 2+ 에서 break 되는 버그 fix).
 
     알고리즘:
       1. row 별 anchor 수집 (fingerprint, url, text)
@@ -244,6 +259,19 @@ def _pick_subjects_for_container(
 
     out: list[Optional[ExtractedRow]] = []
     for ri, items in enumerate(row_anchors):
+        # prefix_hint 가 있으면 prefix 매치 anchor 우선 (page 2+ 에서 정답 패턴
+        # 알고 있을 때 noise anchor 잡지 않도록)
+        if prefix_hint:
+            for fp, url, text in items:
+                if url.startswith(prefix_hint):
+                    chosen = ExtractedRow(detail_url=url, title=text[:200])
+                    chosen.row_text = rows[ri].get_text(" ", strip=True)[:400]
+                    out.append(chosen)
+                    break
+            else:
+                out.append(None)
+            continue
+
         chosen: Optional[ExtractedRow] = None
         chosen_score = -1.0
         for fp, url, text in items:
@@ -334,8 +362,12 @@ def _candidate_repeating_div(soup: BeautifulSoup, base_url: str) -> list[tuple[s
     return out
 
 
-def extract_list_multi(html: str, base_url: str) -> ListExtractionMulti:
-    """모든 list 후보 컨테이너를 반환 (sticky + 본문 동시 케이스 대응)."""
+def extract_list_multi(html: str, base_url: str, *,
+                       prefix_hint: Optional[str] = None) -> ListExtractionMulti:
+    """모든 list 후보 컨테이너를 반환 (sticky + 본문 동시 케이스 대응).
+
+    prefix_hint: 페이지 2+ 에서 학습된 detail prefix 전달 시 그 prefix 매치 anchor 우선.
+    """
     soup = BeautifulSoup(html, "html.parser")
     raw: list[tuple[str, list[Tag]]] = []
     raw += _candidate_table(soup)
@@ -346,7 +378,7 @@ def extract_list_multi(html: str, base_url: str) -> ListExtractionMulti:
     for sig, rows in raw:
         # 컨테이너 단위 분석 — row 별 unique anchor (busiInfoPopup 같은 회사 popup
         # 보다 goView1 같은 detail anchor 우선) 채택
-        extracted = [r for r in _pick_subjects_for_container(rows, base_url) if r]
+        extracted = [r for r in _pick_subjects_for_container(rows, base_url, prefix_hint=prefix_hint) if r]
         if not extracted:
             continue
         out.append(ListExtraction(container_signature=sig, rows=extracted))

@@ -13,8 +13,12 @@ venv/
 data/*.db
 data/*.csv
 data/*.json
+data/*.txt
 data/media/
 !data/.gitkeep
+
+# ad-hoc one-shot scripts (diagnostic / recrawl)
+_*.py
 
 # logs
 logs/

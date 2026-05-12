@@ -54,7 +54,8 @@ def _clean_title(t: Optional[str]) -> Optional[str]:
     return s.strip() or t
 
 
-FAILURE_THRESHOLD_FOR_DEAD = 7  # consecutive_failures 가 이 값 이상이면 dead
+FAILURE_THRESHOLD_FOR_PAUSED = 3  # consecutive_failures 가 이 값 이상이면 paused (진단 필요)
+FAILURE_THRESHOLD_FOR_DEAD = 7    # 더 누적되면 dead
 
 
 @dataclass
@@ -70,6 +71,7 @@ class SiteRunReport:
     unchanged: int = 0
     closed: int = 0
     detail_errors: int = 0
+    skipped_no_detail: int = 0  # detail 실패로 적재 생략된 row 수
     consecutive_failures: int = 0
     jobs_total: int = 0   # 이 run 종료 후 사이트의 jobs 누적 건수
     notes: list[str] = field(default_factory=list)
@@ -315,12 +317,42 @@ def run_site(
 
             detail = None
             # SPA 라 detail HTML 이 의미 없는 사이트는 skip_detail=True (heykorean 등) 로 표시.
-            # naver_cafe 는 어댑터 자체가 detail 없음.
-            skip_detail = bool(src.get("skip_detail")) or fetcher == "naver_cafe"
+            skip_detail = bool(src.get("skip_detail"))
             if fetch_details and not skip_detail:
-                detail = fetch_detail(row.detail_url)
-                if not detail.ok:
+                if fetcher == "naver_cafe":
+                    # 네이버 카페는 JSON detail API 사용 (회원전용 카페는 401 → list-only)
+                    import re as _re
+                    from ..fetchers.naver_cafe import fetch_article_detail as _nc_detail
+                    m = _re.search(r"/articles/(\d+)", row.detail_url)
+                    cafe_id = src.get("cafe_id")
+                    if m and cafe_id:
+                        detail = _nc_detail(cafe_id, m.group(1))
+                elif fetcher == "api" and (src.get("api_schema") or {}).get("detail_api_url_template"):
+                    # SPA 사이트 — detail JSON API 사용 (camhr 등)
+                    import re as _re
+                    from ..extractors.api_schema import ApiSchema
+                    from ..fetchers.api import fetch_api_detail
+                    schema = ApiSchema.from_dict(src["api_schema"])
+                    # detail URL 에서 id 추출 — detail_url_template 의 placeholder 위치
+                    if schema.detail_url_template:
+                        prefix, suffix = schema.detail_url_template.split("{id}", 1)
+                        if row.detail_url.startswith(prefix) and row.detail_url.endswith(suffix or ""):
+                            job_id = row.detail_url[len(prefix):]
+                            if suffix:
+                                job_id = job_id[:-len(suffix)]
+                            if job_id:
+                                detail = fetch_api_detail(schema, job_id)
+                else:
+                    detail = fetch_detail(row.detail_url)
+                if detail and not detail.ok:
                     rep.detail_errors += 1
+
+            # detail fetch 했는데 실패하면 (회원전용 카페, 권한 없음, 404 등) row 자체를
+            # 적재하지 않음 — 제목만 있는 row 는 가치 낮음. skip_detail 사이트나
+            # fetch_details=False 일 때는 list-only 가 의도된 동작이므로 통과.
+            if fetch_details and not skip_detail and not (detail and detail.ok):
+                rep.skipped_no_detail += 1
+                continue
 
             # list_title 우선 — detail <title> 이 사이트 공통 brand 인 경우
             # (e.g. mofa.go.kr "워킹홀리데이인포센터 | 재외동포청") 가 흔함.
@@ -400,6 +432,41 @@ def run_site(
             closed=rep.closed, rows_seen=rep.rows_seen,
             error="; ".join(error_msgs) or None,
         )
+        # status_reason 자동 갱신 — 매 배치마다 "총 N건 / M건 수집누락 (사유)" 형식.
+        # 총 = 사이트가 광고하는 누적 공고수 (target_jobs).
+        # 누락 = target - 현재 DB 적재 수.
+        # 사유: list 단계 미수집 / detail 실패 등 분해.
+        site_now = get_site(site_id)
+        target = site_now and site_now.get("target_jobs")
+        current = _count_jobs(site_id)
+        reason: Optional[str] = None
+        if target and target > 0:
+            missing = max(0, target - current)
+            sub_reasons: list[str] = []
+            # list 단계 미수집 추정: rows_seen < target 면 list 가 다 못 본 것.
+            # (rows_seen 은 fresh 모드에선 전체, incremental 에선 신규만 — 후자에선
+            #  current 가 이미 누적이라 대부분 deficit 이 detail/사이트 변동 쪽)
+            list_seen_fresh_estimate = max(rep.rows_seen, current)
+            if list_seen_fresh_estimate < target:
+                sub_reasons.append(
+                    f"list 단계에서 {target - list_seen_fresh_estimate}건 미수집 "
+                    f"(페이지네이션/접근 제한)"
+                )
+            if fetch_details and rep.skipped_no_detail > 0:
+                sub_reasons.append(
+                    f"detail 실패로 {rep.skipped_no_detail}건 제외 "
+                    f"(회원전용/만료/404 등)"
+                )
+            if missing > 0:
+                tail = f" ({', '.join(sub_reasons)})" if sub_reasons else ""
+                reason = f"총 {target}건 / {missing}건 수집누락{tail}"
+            else:
+                reason = f"총 {target}건 / 0건 수집누락"
+        elif fetch_details and rep.skipped_no_detail > 0:
+            # target 없는 사이트 — detail 실패 카운트만 기록
+            reason = (f"detail 실패로 {rep.skipped_no_detail}건 제외 "
+                      f"(회원전용/만료/404 등)")
+        update_status(site_id, "active", reason=reason)
     else:
         record_attempt(site_id, success=False)
         rep.error = "; ".join(error_msgs) or "all sources failed"
@@ -409,11 +476,26 @@ def run_site(
             closed=rep.closed, rows_seen=rep.rows_seen,
             error=rep.error,
         )
-        # 임계 초과 시 dead
+        # 임계 초과 시 dead → paused (진단 필요) 순서로 평가.
+        # paused 의 reason 은 새 포맷 (총 N건 / M건 수집누락) 유지하되 상태만 paused.
         site_after = get_site(site_id)
-        if site_after and site_after["consecutive_failures"] >= FAILURE_THRESHOLD_FOR_DEAD:
-            update_status(site_id, "dead",
-                          reason=f"consecutive_failures>={FAILURE_THRESHOLD_FOR_DEAD}")
+        if site_after:
+            cf = site_after["consecutive_failures"]
+            if cf >= FAILURE_THRESHOLD_FOR_DEAD:
+                update_status(site_id, "dead",
+                              reason=f"consecutive_failures>={FAILURE_THRESHOLD_FOR_DEAD}")
+            elif cf >= FAILURE_THRESHOLD_FOR_PAUSED:
+                target = site_after.get("target_jobs")
+                current = _count_jobs(site_id)
+                cause = f"배치 {cf}회 연속 실패 — {rep.error or '원인 불명'} (진단 필요)"
+                if target and target > 0:
+                    missing = max(0, target - current)
+                    paused_reason = (f"총 {target}건 / {missing}건 수집누락 ({cause})"
+                                     if missing > 0 else
+                                     f"총 {target}건 / 0건 수집누락 ({cause})")
+                else:
+                    paused_reason = cause
+                update_status(site_id, "paused", reason=paused_reason)
 
     # 사후 상태 채우기
     site_final = get_site(site_id)

@@ -42,6 +42,16 @@ BODY_SELECTORS = (
     ".entry-content",
     ".post-content",
     ".article-content",
+    # jobposting.co.kr 계열
+    ".body-body-", ".body-center-", ".job-body-",
+    # hrdkorea / 한국 정부 사이트 계열
+    "#print", "#normal_page", "#contents",
+    # cambojob.com — left column 만 본문, right 는 사이드바
+    ".job-detail-left", ".job-detail",
+    # worldjob.or.kr — view-tab-wrap 이 진짜 detail
+    ".view-tab-wrap", ".wjobDerailveiw",
+    # peoplenjob.com — job-info 가 본문 (회사 카드/AI 요약/공유 모달 제외)
+    ".job-info", ".jd-v2-card",
     "main",
     "#content",
     "#main",
@@ -54,7 +64,14 @@ NOISE_SELECTORS = (
     ".prev-next", ".prevnext", ".pager", ".paging", ".pagination",
     ".notice-area", ".board-notice", ".disclaimer", ".caution",
     ".sns-share", ".share-area", ".btn-area", ".button-area",
-    "#snb",  # 서브 nav 메뉴
+    "#snb", "#lnb", "#gnb",  # 사이드/상단 nav 메뉴
+    "#header", "#footer", "#left", "#right",  # div 기반 layout (hrdkorea 등)
+    ".header", ".footer", ".footer-part1", ".footer-part2",  # class 기반 footer
+    ".job-detail-right", ".categoryJobs", "#categoryJobs",  # cambojob 사이드바/추천
+    # peoplenjob.com — AI 영문 요약 / 공유 모달 / 안내문
+    "#ai-summary-section", ".ai-job-reference", ".ajr-foot",
+    "#modal-share-label", ".modal-share", ".share-modal",
+    ".job-detail__list",  # 하단 안내문 ("본 정보는 ... 피플앤잡 ...")
     # gnuboard5 — 댓글, 이전/다음글, 사용자 버튼
     "#bo_vc", ".bo_vc", "#bo_v_top", "#bo_v_btm",
     ".bo_v_top", ".bo_v_btm", ".btn_bo_user", ".bo_v_nb", "#bo_v_nb",
@@ -66,6 +83,8 @@ NOISE_SELECTORS = (
     # SNS 공유
     ".sns_share", ".sns-share-area", ".share-buttons", ".share_buttons",
     ".social-share", ".social_share", "#sns_share_modal", ".sns_share_modal",
+    # jobposting.co.kr footer
+    ".bottom_menu", ".bottom-menu--", ".copyright",
 )
 BODY_MAX_CHARS = 20_000          # plain text snippet 상한
 BODY_HTML_MAX_CHARS = 200_000    # 200KB — 본문 HTML 원본
@@ -143,6 +162,27 @@ _TRAILING_NAV_RE = re.compile(
 def _strip_trailing_nav(text: str) -> str:
     """본문 끝에 남는 nav 키워드 제거 (이전글/다음글/목록 등)."""
     return _TRAILING_NAV_RE.sub("", text).rstrip()
+
+
+def _expand_html_textareas(soup: BeautifulSoup) -> int:
+    """`<textarea>` 안에 escaped HTML 이 들어있는 케이스를 다시 파싱해서 자리 교체.
+
+    jobposting.co.kr 처럼 본문이 hidden textarea 의 value 로 저장되고 JS 가 다른 div 에
+    innerHTML 로 넣는 사이트 — textarea.text 만 뽑으면 HTML 태그가 그대로 텍스트가 됨.
+    """
+    n = 0
+    for ta in soup.find_all("textarea"):
+        content = ta.string if ta.string else ta.get_text()
+        if not content or "<" not in content or ">" not in content:
+            continue
+        try:
+            inner = BeautifulSoup(content, "html.parser")
+        except Exception:  # noqa: BLE001
+            continue
+        # textarea 를 inner 의 모든 자식으로 교체
+        ta.replace_with(inner)
+        n += 1
+    return n
 
 
 def _pick_body_node(soup: BeautifulSoup) -> Optional[Tag]:
@@ -344,13 +384,13 @@ def _extract_contacts(text: str) -> tuple[list[str], list[str]]:
     return emails, phones
 
 
-def _resolve_synthetic_url(url: str, *, timeout: int) -> str:
+def _resolve_synthetic_url(url: str, *, timeout: int) -> Optional[str]:
     """`?_jsfn=fn&_jsid=N` 합성 URL → 실제 detail URL 로 리라이트.
 
     list_extractor 가 `javascript:goview('16811')` 같은 JS 핸들러를
     `?_jsfn=goview&_jsid=16811` 합성 형태로 저장한다. 이 함수는 부모 JSP 페이지를
     한 번 받아서 해당 JS 함수의 `f.action="X"` 를 찾아 실제 URL 로 변환한다.
-    실패 시 원본 url 반환 (best-effort).
+    실제 detail 로 매핑할 수 없으면 (popup 류 등) None 반환 → fetch_detail 에서 error.
     """
     from urllib.parse import urlparse, parse_qs, urljoin
     p = urlparse(url)
@@ -359,24 +399,38 @@ def _resolve_synthetic_url(url: str, *, timeout: int) -> str:
     jsid = (qs.get("_jsid") or [None])[0]
     if not fn or not jsid:
         return url
+
+    # 사이트 특화 — worldjob.or.kr 의 goView1 함수는 view.do 로 가지만 그건
+    # 직접 접근 시 'pageAction alert' 차단됨. 실제 detail 본문은
+    # epmtLinkMyday.do 에서 동일 params 로 200KB+ 응답.
+    if "worldjob.or.kr" in p.netloc and fn.lower() == "goview1":
+        return (f"https://www.worldjob.or.kr/advnc/epmtLinkMyday.do"
+                f"?joCrtfcNo={jsid}&joCrtfcDsp=1&joCrtfcDspSn=1&dobType=1")
+
+    # popup-suffix fn 은 navigation 이 아니라 모달/팝업 — detail 페이지 없음.
+    # (예: busiInfoPopup = 회사정보 팝업, list 컨테이너 안에 detail anchor 와
+    #  나란히 등장하는 경우 list_extractor 가 잘못 채택할 수 있음.)
+    if fn.lower().endswith("popup"):
+        return None
+
     parent_url = f"{p.scheme}://{p.netloc}{p.path}"
     pr = fetch(parent_url, timeout=timeout)
     if not pr.ok:
-        return url
+        return None
     fn_re = re.compile(
         rf"function\s+{re.escape(fn)}\s*\([^)]*\)\s*\{{([^}}]+)\}}",
         re.IGNORECASE,
     )
     m = fn_re.search(pr.text or "")
     if not m:
-        return url
+        return None
     body = m.group(1)
     action_m = re.search(r'\.action\s*=\s*[\'"]([^\'"]+)[\'"]', body)
     if not action_m:
-        return url
+        return None
     action = action_m.group(1)
-    # idx 변수 이름 (form 의 input name) 추출
-    idx_m = re.search(r'f\.(\w+)\.value\s*=', body)
+    # idx 변수 이름 (form 의 input name) 추출 — 변수가 f/frm/obj/form 등 다양
+    idx_m = re.search(r'\w+\.(\w+)\.value\s*=', body)
     idx_name = idx_m.group(1) if idx_m else "idx"
     action_abs = urljoin(parent_url, action)
     sep = "&" if "?" in action_abs else "?"
@@ -385,6 +439,8 @@ def _resolve_synthetic_url(url: str, *, timeout: int) -> str:
 
 def fetch_detail(url: str, *, timeout: int = 20) -> JobDetail:
     real_url = _resolve_synthetic_url(url, timeout=timeout)
+    if real_url is None:
+        return JobDetail(url=url, error="synthetic URL not resolvable to real detail")
     r = fetch(real_url, timeout=timeout)
     if not r.ok:
         return JobDetail(url=real_url, error=r.error or f"HTTP {r.status}")
@@ -404,6 +460,8 @@ def fetch_detail(url: str, *, timeout: int = 20) -> JobDetail:
     for t in soup(["script", "style", "noscript", "nav", "header", "footer", "aside"]):
         t.decompose()
     _strip_comments(soup)
+    # textarea 안 escaped HTML 재파싱 (jobposting 등) — strip 보다 먼저 해야 그 안의 내용도 strip 적용됨
+    _expand_html_textareas(soup)
 
     # NOISE strip 전에 gnuboard5 sibling 추출 (이미지/첨부 노드들 — 이후 본문 추출 시 합쳐짐)
     extra_imgs, extra_files = _gnuboard_extras(soup)
@@ -441,8 +499,16 @@ def fetch_detail(url: str, *, timeout: int = 20) -> JobDetail:
 
     emails, phones = _extract_contacts(body_text)
 
+    # 빈 detail 가드: 본문/이미지/첨부/jsonld 모두 사실상 없으면 에러로 취급.
+    # (worldjob 처럼 만료된 job ID 가 홈페이지로 redirect 되거나 anti-scraping
+    #  에 걸려 placeholder HTML 이 떨어진 경우 — title 만 남는 garbage 방지.)
+    if (len(body_text) < 50 and not images and not attachments
+            and not iframes and not videos and not jsonld):
+        return JobDetail(url=real_url,
+                         error=f"empty detail (body={len(body_text)}c, no media/jsonld)")
+
     return JobDetail(
-        url=url,
+        url=real_url,
         title=title,
         raw_text_snippet=body_text,
         body_html=body_html,

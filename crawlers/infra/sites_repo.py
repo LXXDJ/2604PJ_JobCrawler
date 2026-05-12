@@ -90,6 +90,15 @@ def update_status(
         )
 
 
+def set_target_jobs(site_id: str, target: Optional[int]) -> None:
+    """사이트가 광고하는 누적 공고 건수 (수집 목표) 저장."""
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE sites SET target_jobs = ?, updated_at = datetime('now') WHERE id = ?",
+            (target, site_id),
+        )
+
+
 def record_attempt(site_id: str, *, success: bool) -> None:
     with get_conn() as conn:
         if success:

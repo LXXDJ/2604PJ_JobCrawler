@@ -171,8 +171,15 @@ def _detail_prefix(url: str) -> str:
 
     예: https://job.career.co.kr/recruit/view/21850667
         → https://job.career.co.kr/recruit/view/
+
+    JS synthetic URL (`?_jsfn=fn&_jsid=N`) 은 path 가 list 엔드포인트와 같아서
+    path-prefix 만으론 detail vs popup (예: busiInfoPopup) 구별 불가. 이 경우
+    `?_jsfn=fn&_jsid=` 까지 prefix 에 포함시켜 같은 fn 만 매칭되게 한다.
     """
     p = urlparse(url)
+    qs = dict(parse_qsl(p.query, keep_blank_values=True))
+    if "_jsfn" in qs:
+        return f"{p.scheme}://{p.netloc}{p.path}?_jsfn={qs['_jsfn']}&_jsid="
     segments = p.path.split("/")
     if len(segments) <= 1:
         new_path = "/"
@@ -442,7 +449,9 @@ def crawl_list(
             log(f"    break: page {page} fetch fail (status={rp.status})")
             break
 
-        multi_p = extract_list_multi(rp.text, rp.final_url)
+        # page 2+ 는 prefix 학습됨 → 힌트 전달해서 row 안의 prefix 매치 anchor 우선 채택
+        # (peoplenjob 처럼 row 첫 anchor 가 회사 link 인 경우 break 방지)
+        multi_p = extract_list_multi(rp.text, rp.final_url, prefix_hint=prefix)
         # 같은 시그니처 컨테이너만 사용
         same_sig = [e for e in multi_p.candidates
                     if _normalize_sig(e.container_signature) == locked_sig]

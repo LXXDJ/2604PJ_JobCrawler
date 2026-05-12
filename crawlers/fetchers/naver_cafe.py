@@ -12,6 +12,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Optional
 
+from bs4 import BeautifulSoup
+
 from ..extractors.list_extractor import ExtractedRow
 from .static import fetch as fetch_static
 
@@ -148,3 +150,188 @@ def crawl_cafe(
             break
 
     return result
+
+
+# ============================================================================
+# Article detail (공개 카페만 — 회원전용 카페는 401)
+# ============================================================================
+
+def fetch_article_detail(cafe_id: str | int, article_id: str | int, *, timeout: int = 15):
+    """카페 게시글 detail JSON API → JobDetail 변환.
+
+    공개 카페만 동작. 회원전용 카페는 401 반환 → JobDetail.error 에 명시.
+    """
+    # 순환 import 회피용 lazy import
+    from ..batch.detail_crawler import (
+        JobDetail, _absolutize_html, _extract_images,
+        _extract_links_and_attachments, _extract_iframes_videos,
+        _extract_tables, _extract_contacts, _strip_trailing_nav,
+        BODY_MAX_CHARS, BODY_HTML_MAX_CHARS,
+    )
+
+    detail_url = _detail_url(cafe_id, article_id)
+    api = (
+        f"https://apis.naver.com/cafe-web/cafe-articleapi/v2.1/cafes/{cafe_id}"
+        f"/articles/{article_id}?query=&useCafeId=true&requestFrom=A"
+    )
+    r = fetch_static(api, timeout=timeout, headers=_headers(cafe_id, 0))
+    if not r.ok:
+        return JobDetail(url=detail_url, error=r.error or f"HTTP {r.status}")
+    try:
+        data = json.loads(r.text or "{}")
+    except Exception as e:  # noqa: BLE001
+        return JobDetail(url=detail_url, error=f"json parse fail: {e}")
+
+    res = data.get("result") if isinstance(data, dict) else {}
+    if not isinstance(res, dict):
+        return JobDetail(url=detail_url, error="malformed response")
+    art = res.get("article")
+    if not isinstance(art, dict):
+        # 회원전용/비공개 — errorCode 0004 등
+        err_code = res.get("errorCode") or "?"
+        msg = res.get("reason") or res.get("message") or "no article"
+        return JobDetail(url=detail_url, error=f"cafe_api {err_code}: {msg}")
+
+    title = (art.get("subject") or "").strip()
+    content_html = art.get("contentHtml") or art.get("content") or ""
+
+    # contentHtml 의 [[[CONTENT-ELEMENT-N]]] placeholder 를 contentElements[N] 의
+    # 실제 HTML 로 교체 (이미지/비디오 inline 렌더 위함)
+    elements_raw = art.get("contentElements") or []
+    if isinstance(elements_raw, list) and elements_raw:
+        import re as _re
+        from html import escape as _escape
+        def _element_to_html(e: dict) -> str:
+            t = e.get("type") if isinstance(e, dict) else None
+            j = e.get("json") if isinstance(e, dict) else None
+            if not isinstance(j, dict):
+                return ""
+            if t == "IMAGE":
+                img = j.get("image") or {}
+                u = img.get("url") or ""
+                alt = _escape(img.get("fileName") or "")
+                if u:
+                    return f'<img src="{_escape(u)}" alt="{alt}" />'
+            elif t in ("VIDEO", "MOVIE"):
+                v = j.get("video") or j
+                u = v.get("url") or v.get("playUrl") or ""
+                if u:
+                    return f'<video src="{_escape(u)}" controls></video>'
+            elif t in ("FILE", "ATTACH"):
+                f = j.get("file") or j
+                u = f.get("url") or f.get("downloadUrl") or ""
+                name = _escape(f.get("fileName") or f.get("name") or "첨부")
+                if u:
+                    return f'<a href="{_escape(u)}">{name} 다운로드</a>'
+            elif t in ("OGLINK", "LINK"):
+                l = j.get("link") or j
+                u = l.get("link") or l.get("url") or ""
+                desc = _escape(l.get("title") or l.get("description") or u)
+                if u:
+                    return f'<a href="{_escape(u)}">{desc}</a>'
+            return ""
+        def _replace(m):
+            idx = int(m.group(1))
+            if 0 <= idx < len(elements_raw):
+                return _element_to_html(elements_raw[idx])
+            return ""
+        content_html = _re.sub(r"\[\[\[CONTENT-ELEMENT-(\d+)\]\]\]",
+                               _replace, content_html)
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    _absolutize_html(soup, detail_url)
+    body_text = " ".join(soup.get_text(" ", strip=True).split())[:BODY_MAX_CHARS]
+    body_text = _strip_trailing_nav(body_text)
+    body_html = str(soup)[:BODY_HTML_MAX_CHARS]
+
+    images = _extract_images(soup, detail_url)
+    links, attachments = _extract_links_and_attachments(soup, detail_url)
+    iframes, videos = _extract_iframes_videos(soup, detail_url)
+    tables = _extract_tables(soup)
+    emails, phones = _extract_contacts(body_text)
+
+    # 카페 신형 에디터 (Smart Editor 3) — contentElements 안에 이미지/파일/비디오가
+    # component 형태로 저장되며 contentHtml 에는 없을 수 있음.
+    elements = art.get("contentElements") or []
+    if isinstance(elements, list):
+        seen_imgs = set(images)
+        for e in elements:
+            if not isinstance(e, dict):
+                continue
+            t = e.get("type")
+            j = e.get("json") or {}
+            if not isinstance(j, dict):
+                continue
+            if t == "IMAGE":
+                img_obj = j.get("image") or {}
+                u = img_obj.get("url")
+                if u and u not in seen_imgs:
+                    images.append(u)
+                    seen_imgs.add(u)
+            elif t in ("FILE", "ATTACH"):
+                file_obj = j.get("file") or j
+                u = file_obj.get("url") or file_obj.get("downloadUrl") or ""
+                name = file_obj.get("fileName") or file_obj.get("name") or ""
+                if u:
+                    ext = name.rsplit(".", 1)[-1].lower()[:6] if "." in name else ""
+                    existing = {x["url"] for x in attachments}
+                    if u not in existing:
+                        attachments.append({"url": u, "text": name, "ext": ext})
+            elif t in ("VIDEO", "MOVIE"):
+                v_obj = j.get("video") or j
+                u = v_obj.get("url") or v_obj.get("playUrl") or ""
+                if u and u not in videos:
+                    videos.append(u)
+            elif t in ("OGLINK", "LINK"):
+                l_obj = j.get("link") or j
+                u = l_obj.get("link") or l_obj.get("url") or ""
+                desc = l_obj.get("title") or l_obj.get("description") or ""
+                if u and not any(ln.get("url") == u for ln in links):
+                    links.append({"url": u, "text": desc[:200]})
+
+    # 카페 article 자체의 첨부 파일 (writeAttaches/attaches/attachFiles 등) 합치기
+    for key in ("attaches", "attachFiles", "fileList"):
+        items = art.get(key) or []
+        if not isinstance(items, list):
+            continue
+        for a in items:
+            if not isinstance(a, dict):
+                continue
+            url = a.get("url") or a.get("downloadUrl") or a.get("path") or ""
+            name = a.get("name") or a.get("fileName") or ""
+            if not url:
+                continue
+            ext = ""
+            if "." in name:
+                ext = name.rsplit(".", 1)[-1].lower()[:6]
+            existing = {x["url"] for x in attachments}
+            if url not in existing:
+                attachments.append({"url": url, "text": name, "ext": ext})
+
+    # 카페 메타 (작성자/조회수/댓글수/작성일)
+    writer = (art.get("writerInfo") or {}) if isinstance(art.get("writerInfo"), dict) else {}
+    meta = {
+        "naver_cafe": True,
+        "writer": writer.get("nickName") or writer.get("memberKey"),
+        "writeDateTimestamp": art.get("writeDateTimestamp"),
+        "readCount": art.get("readCount"),
+        "commentCount": art.get("commentCount"),
+        "likeCount": art.get("likeCount"),
+    }
+
+    return JobDetail(
+        url=detail_url,
+        title=title,
+        raw_text_snippet=body_text,
+        body_html=body_html,
+        images=images,
+        links=links,
+        attachments=attachments,
+        iframes=iframes,
+        videos=videos,
+        emails=emails,
+        phones=phones,
+        tables=tables,
+        meta=meta,
+        jsonld=[],
+    )

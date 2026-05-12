@@ -341,7 +341,11 @@ with tab_jobs:
         )
         sel_rows = getattr(evt, "selection", {}).get("rows", []) if evt else []
         if sel_rows:
-            row = df_jobs.iloc[sel_rows[0]]
+            # 위치 인덱스 대신 id 로 lookup — client-side 정렬 후 위치가 어긋나는 이슈 방지
+            sel_idx = sel_rows[0]
+            sel_id = df_view.iloc[sel_idx]["id"]
+            matched = df_jobs[df_jobs["id"] == sel_id]
+            row = matched.iloc[0] if not matched.empty else df_jobs.iloc[sel_idx]
             raw = _parse_raw(row.get("raw"))
             st.subheader(row["title"] or "(제목 없음)")
             meta_cols = st.columns(3)
