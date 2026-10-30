@@ -8,15 +8,17 @@ import urllib.request
 from .config import SLACK_WEBHOOK_URL
 
 
-def slack_notify(text: str, *, blocks: list | None = None, timeout: int = 10) -> bool:
-    if not SLACK_WEBHOOK_URL:
+def slack_notify(text: str, *, blocks: list | None = None, timeout: int = 10,
+                 webhook_url: str | None = None) -> bool:
+    url = webhook_url if webhook_url is not None else SLACK_WEBHOOK_URL
+    if not url:
         return False
     payload = {"text": text}
     if blocks:
         payload["blocks"] = blocks
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        SLACK_WEBHOOK_URL,
+        url,
         data=data,
         headers={"Content-Type": "application/json"},
         method="POST",

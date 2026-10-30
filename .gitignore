@@ -32,3 +32,7 @@ Thumbs.db
 
 # claude
 .claude/
+
+# 개인 문서 (이력서 등 개인정보)
+*.pdf
+private/
