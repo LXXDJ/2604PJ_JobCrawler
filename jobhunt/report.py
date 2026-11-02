@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import Counter
 
 from crawlers.infra import config  # noqa: F401  (.env 로딩)
@@ -17,6 +18,14 @@ ROLE_LABEL = {
     "llm_app": "LLM 애플리케이션", "ml_engineer": "ML 엔지니어", "ai_fullstack": "AI 풀스택",
     "backend": "백엔드", "data": "데이터", "research": "연구", "other": "기타",
 }
+
+_SEP_RE = re.compile(r"[\s\-_.]+")
+
+
+def _label_key(s: str) -> str:
+    """표기 차이 무시용 키 — 대소문자·공백·하이픈·언더스코어·점 제거.
+    "Hugging Face"/"HuggingFace", "Tensorflow"/"TensorFlow", "Node.js"/"NodeJS" 를 같은 키로."""
+    return _SEP_RE.sub("", s.strip().lower())
 
 
 def notify_new(*, min_score: int = 65, limit: int = 15, dry_run: bool = False) -> tuple[int, str]:
@@ -68,25 +77,29 @@ def market_report(*, top: int = 20, fit_min: int = 60) -> str:
 
     target = [r for r in rows if (r["fit_score"] or 0) >= fit_min]
     req, pref, gaps = Counter(), Counter(), Counter()
-    display: dict[str, str] = {}   # 소문자 키 → 처음 본 표기 ("Tensorflow" / "TensorFlow" 합치기)
+    forms: dict[str, Counter] = {}   # 정규화 키 → 원 표기별 빈도 (출력은 가장 많이 쓰인 표기)
 
     def labels(raw: str | None) -> set[str]:
         out = set()
         for s in json.loads(raw or "[]"):
-            display.setdefault(s.lower(), s)
-            out.add(display[s.lower()])
+            if not s.strip():
+                continue
+            key = _label_key(s)
+            forms.setdefault(key, Counter())[s.strip()] += 1
+            out.add(key)
         return out
 
     for r in target:
         req.update(labels(r["required_skills"]))
         pref.update(labels(r["preferred_skills"]))
         gaps.update(labels(r["gaps"]))
+    display = {k: c.most_common(1)[0][0] for k, c in forms.items()}
     roles = Counter(r["role_type"] for r in rows)
     eng = sum(r["english_required"] or 0 for r in target)
 
     def table(c: Counter, n: int) -> str:
         total = len(target) or 1
-        return "\n".join(f"  {k:<28s} {v:>4}  ({v / total:>4.0%})" for k, v in c.most_common(n))
+        return "\n".join(f"  {display[k]:<28s} {v:>4}  ({v / total:>4.0%})" for k, v in c.most_common(n))
 
     out = [
         f"=== 시장 리포트: 분석 {len(rows)}건 중 적합도 {fit_min}+ {len(target)}건 기준 ===",

@@ -58,6 +58,8 @@ SYSTEM = """너는 한국 IT 채용공고를 분석하는 커리어 어드바이
   "RAG", "AWS", "Kubernetes", "Docker", "PyTorch", "Spring Boot", "React", "Vector DB", "LLM Fine-tuning", "MLOps").
   소프트스킬("커뮤니케이션 능력"), 학위("석사 이상"), 연차, 도메인 지식("패션 도메인 이해"), 논문·대회 실적은
   required/preferred 어느 쪽 skills 에도 넣지 않는다.
+  특정 기술·도구가 아닌 일반 역량("Problem Solving", "Code Review", "Framework Implementation",
+  "Service Deployment", "Backend Integration" 등)도 넣지 않는다. 이력서 기술 스택 칸에 적을 수 있는 것만 넣는다.
   학위·도메인 요건은 gaps 와 fit_reason 에서만 다룬다.
 - years_min/years_max: 본문 기준. 언급 없으면 null.
 - domain: 산업/서비스 도메인을 짧게 (예: "핀테크", "이커머스", "헬스케어", "B2B SaaS", "제조", "교육")
