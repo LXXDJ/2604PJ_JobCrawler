@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from collections import Counter
 from datetime import datetime, timedelta
 
@@ -13,25 +12,21 @@ from crawlers.infra.notify import slack_notify
 from . import batch_status
 from .batch_status import STEP_LABEL, STEPS
 from .db import get_conn
+from .fit import label_key as _label_key
 
 # 팀 프로젝트 SLACK_WEBHOOK_URL 로 새지 않도록 개인용 웹훅만 사용 (fallback 없음)
 WEBHOOK = os.getenv("JOBHUNT_SLACK_WEBHOOK_URL", "")
+
+# 고적합 기준 — Slack 알림(배치 완료·notify)과 대시보드 강조가 모두 이 값을 쓴다
+# 2026-11-04 sonnet 전환 후 70: 목표와 정확히 맞는 공고가 72~74 에 몰려 75 면 흔들림 몇 점에 빠짐
+HIGH_FIT = 70
 
 ROLE_LABEL = {
     "llm_app": "LLM 애플리케이션", "ml_engineer": "ML 엔지니어", "ai_fullstack": "AI 풀스택",
     "backend": "백엔드", "data": "데이터", "research": "연구", "other": "기타",
 }
 
-_SEP_RE = re.compile(r"[\s\-_.]+")
-
-
-def _label_key(s: str) -> str:
-    """표기 차이 무시용 키 — 대소문자·공백·하이픈·언더스코어·점 제거.
-    "Hugging Face"/"HuggingFace", "Tensorflow"/"TensorFlow", "Node.js"/"NodeJS" 를 같은 키로."""
-    return _SEP_RE.sub("", s.strip().lower())
-
-
-def notify_new(*, min_score: int = 65, limit: int = 15, dry_run: bool = False) -> tuple[int, str]:
+def notify_new(*, min_score: int = HIGH_FIT, limit: int = 15, dry_run: bool = False) -> tuple[int, str]:
     """분석 완료 + 아직 알림 안 보낸 고적합 공고를 Slack 으로. Returns (건수, 메시지)."""
     with get_conn() as conn:
         rows = conn.execute(
@@ -124,7 +119,7 @@ def _steps_line(st: dict) -> str:
     return " · ".join(marks)
 
 
-def daily_done_message(st: dict, *, min_score: int = 70, top: int = 5) -> tuple[str, list[int]]:
+def daily_done_message(st: dict, *, min_score: int = HIGH_FIT, top: int = 5) -> tuple[str, list[int]]:
     """배치 정상 완료 알림. Returns (메시지, 알림 처리할 고적합 공고 id)."""
     start, end = _ts(st["started_at"]), datetime.now()
     col = st.get("collect") or {}
@@ -210,7 +205,7 @@ def daily_check_message(now: datetime | None = None) -> str | None:
         for f in st.get("failures") or []:
             prog = f" ({f['done']:,} / {f['total']:,}건까지 처리)" if f.get("total") else ""
             lines.append(f"  • {STEP_LABEL.get(f['step'], f['step'])} 단계 실패{prog}: {f['error']}")
-        lines.append("  → 로그: data/logs/jobhunt.log")
+        lines.append("  → 로그: ~/jobhunt-data/logs/jobhunt.log")
         return "\n".join(lines)
 
     # running
@@ -230,7 +225,7 @@ def daily_check_message(now: datetime | None = None) -> str | None:
             f"  • 멈춘 단계: {step_txt}, {_step_progress(st)}",
             f"  • 원인: {cause}",
             f"  • 처리 안 된 단계: {' · '.join(left)}",
-            "  → 로그: data/logs/jobhunt.log",
+            "  → 로그: ~/jobhunt-data/logs/jobhunt.log",
         ])
     step_start = _ts(st.get("step_started_at")) or start
     return "\n".join([

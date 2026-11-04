@@ -1,10 +1,15 @@
-"""jobhunt 전용 SQLite (data/jobhunt.db). 팀 프로젝트 crawler.db 와 분리."""
+"""jobhunt 전용 SQLite (~/jobhunt-data/jobhunt.db). 팀 프로젝트 crawler.db 와 분리."""
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parents[1] / "data" / "jobhunt.db"
+# 개인 데이터(DB·대시보드 HTML·로그)는 프로젝트 폴더 밖에 둔다 — 프로젝트가 OneDrive 안이라
+# 배치가 DB 를 쓰는 중에 동기화가 파일을 건드리면 충돌·손상 위험 + 개인 데이터 클라우드 업로드 (2026-11-04 이전)
+DATA_DIR = Path(os.environ.get("JOBHUNT_DATA_DIR") or Path.home() / "jobhunt-data")
+LOG_DIR = DATA_DIR / "logs"
+DB_PATH = DATA_DIR / "jobhunt.db"
 
 
 SCHEMA = """
@@ -47,7 +52,7 @@ CREATE TABLE IF NOT EXISTS postings (
 CREATE INDEX IF NOT EXISTS idx_postings_matched ON postings(matched, status);
 
 
--- LLM 구조화 추출 + 적합도. 프로필이 바뀌면 이 테이블만 지우고 다시 돌리면 됨.
+-- LLM 구조화 추출 + 적합도. 경력·목표가 바뀌면 extract --refit, 보유 기술만 바뀌면 rescore.
 CREATE TABLE IF NOT EXISTS insights (
     posting_id         INTEGER PRIMARY KEY REFERENCES postings(id) ON DELETE CASCADE,
     model              TEXT,
@@ -63,9 +68,9 @@ CREATE TABLE IF NOT EXISTS insights (
     english_required   INTEGER,    -- 0/1
     salary_text        TEXT,
 
-    fit_score          INTEGER,    -- 0~100
-    fit_reason         TEXT,
-    gaps               TEXT        -- JSON list: 내가 부족한 요건
+    fit_score          INTEGER,    -- 0~100 최종 (fit.py: 업무 범위 + 기술 매칭)
+    fit_reason         TEXT,       -- 업무 범위 판단 근거 (LLM)
+    gaps               TEXT        -- JSON list: 내가 부족한 요건 (기술 갭 + scope_gaps)
 );
 
 
@@ -80,6 +85,18 @@ CREATE TABLE IF NOT EXISTS companies (
     response_rate      REAL,       -- 지원 응답률 %
     fetched_at         TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     PRIMARY KEY (source, external_id)
+);
+
+
+-- 기술 표기 분류표 (fit.py) — 공고에서 추출된 기술 표기마다 "내가 가졌나" 를 한 번만 판단해 저장.
+-- 보유 기술 섹션이 바뀌면(skills_hash 불일치) 다시 분류. pinned=1 은 직접 고정한 값이라 재분류 안 함
+CREATE TABLE IF NOT EXISTS skill_labels (
+    key                TEXT PRIMARY KEY,   -- fit.label_key (표기 차이 무시 키)
+    label              TEXT NOT NULL,      -- 대표 표기
+    verdict            TEXT CHECK (verdict IN ('has','partial','none','na')),   -- na = 기술 아님 (점수·갭 제외)
+    pinned             INTEGER NOT NULL DEFAULT 0,
+    skills_hash        TEXT,               -- 분류 당시 보유 기술 섹션 버전
+    classified_at      TEXT
 );
 
 
@@ -113,6 +130,11 @@ _MIGRATIONS = [
     ("companies", "company_type", "TEXT"),      # 대기업 / 중견기업 / 중소기업 ...
     ("companies", "fin_source", "TEXT"),        # 재무 출처 (예: "saramin:<csn>")
     ("companies", "fin_checked_at", "TEXT"),    # 재무 조회 시도 시각 (못 찾아도 찍음 → 30일 뒤 재시도)
+    # 적합도 분리 (fit.py): fit_score·gaps 는 아래 값 + 보유 기술로 코드가 다시 계산
+    ("insights", "scope_score", "INTEGER"),     # LLM 업무 범위 적합도 0~100 (기술 스택 제외)
+    ("insights", "scope_gaps", "TEXT"),         # JSON list — LLM 기술 외 갭 (고정 라벨)
+    ("insights", "skill_score", "INTEGER"),     # 코드 기술 매칭 0~100 (기술 표기 없으면 NULL)
+    ("insights", "profile_hash", "TEXT"),       # 분석 당시 LLM 용 프로필 버전 (profile.profile_hash)
 ]
 
 
@@ -123,7 +145,13 @@ def get_conn(db_path: Path = DB_PATH) -> sqlite3.Connection:
     # WAL: 대시보드 서버 읽기와 배치 쓰기가 서로 막지 않게 (2026-11-03 수집·평가 동시 실행 중 database is locked)
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
+    # skill_labels.verdict 에 'na' 추가 (2026-11-04) — CHECK 는 ALTER 로 못 바꿔 옮겨 담고 재생성
+    old = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'skill_labels'").fetchone()
+    if old and "'na'" not in old["sql"]:
+        conn.execute("ALTER TABLE skill_labels RENAME TO _skill_labels_old")
     conn.executescript(SCHEMA)
+    if old and "'na'" not in old["sql"]:
+        conn.executescript("INSERT INTO skill_labels SELECT * FROM _skill_labels_old; DROP TABLE _skill_labels_old;")
     for table, col, typ in _MIGRATIONS:
         if col not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")

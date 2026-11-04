@@ -5,18 +5,22 @@
   python -m scripts.jobhunt.run collect --pages 2    # 앞 2페이지만 (테스트용, 마감처리 생략)
   python -m scripts.jobhunt.run collect --source saramin   # 특정 사이트만
   python -m scripts.jobhunt.run extract --max 60     # LLM 구조화 추출 + 적합도 (claude -p, 구독)
+  python -m scripts.jobhunt.run extract --refit 50 --max 1000   # 경력·목표 수정 후 적합도 50+ 공고 재분석
+  python -m scripts.jobhunt.run skills [--all]       # 기술 표기 분류 + 적합도 재계산 (보유 기술만 바꿨을 땐 이것만)
+  python -m scripts.jobhunt.run skills --show has    # 분류표 보기 / --pin "Azure=partial" 로 직접 고정
   python -m scripts.jobhunt.run notify [--dry-run]   # 고적합 신규 공고 Slack (JOBHUNT_SLACK_WEBHOOK_URL)
   python -m scripts.jobhunt.run report               # 요구 기술 / 내 갭 빈도 리포트
   python -m scripts.jobhunt.run stats                # 수집 현황
-  python -m scripts.jobhunt.run dashboard [--open]   # 로컬 HTML 대시보드 생성 (data/jobhunt_dashboard.html)
+  python -m scripts.jobhunt.run dashboard [--open]   # 로컬 HTML 대시보드 생성 (~/jobhunt-data/jobhunt_dashboard.html)
   python -m scripts.jobhunt.run serve [--port 8787]  # 대시보드 로컬 서버 (요청마다 DB 최신 반영)
   python -m scripts.jobhunt.run companies            # 회사 태그(인원·연봉 백분위·투자 등) 갱신
   python -m scripts.jobhunt.run ocr --max 40         # 이미지 통짜 공고 → 텍스트 (claude -p + Read)
   python -m scripts.jobhunt.run career --max 80      # 커리어 관점 포지션 평가 (추천도용, claude -p)
-  python -m scripts.jobhunt.run daily [--max 300]    # 매일 배치(00:00): collect → companies → ocr → extract → career → dashboard → 완료 알림
+  python -m scripts.jobhunt.run daily [--max N]      # 매일 배치(00:00, 기본 상한 없음): collect → companies → ocr → extract → skills → career → dashboard → 완료 알림
   python -m scripts.jobhunt.run check [--dry-run]    # 08:00 점검: 배치가 안 끝났으면 진행 중 / 오류 / 미실행 Slack 알림
 
-작업 스케줄러에서는 pythonw.exe 로 실행 → 출력은 data/logs/jobhunt.log 로 간다.
+작업 스케줄러에서는 pythonw.exe 로 실행 → 출력은 ~/jobhunt-data/logs/jobhunt.log 로 간다.
+개인 데이터(DB·대시보드·로그)는 ~/jobhunt-data (환경변수 JOBHUNT_DATA_DIR 로 변경 가능).
 """
 from __future__ import annotations
 
@@ -28,20 +32,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+from jobhunt.db import LOG_DIR
+
 if sys.stdout is None:   # pythonw (작업 스케줄러) — 콘솔이 없으니 로그 파일로
-    _log_dir = ROOT / "data" / "logs"
-    _log_dir.mkdir(parents=True, exist_ok=True)
-    sys.stdout = sys.stderr = open(_log_dir / "jobhunt.log", "a", encoding="utf-8", buffering=1)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    sys.stdout = sys.stderr = open(LOG_DIR / "jobhunt.log", "a", encoding="utf-8", buffering=1)
 else:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-from jobhunt import batch_status, dashboard, server
+from jobhunt import batch_status, dashboard, fit, server
 from jobhunt.career import evaluate
 from jobhunt.collect import SOURCES, collect, refresh_companies
 from jobhunt.db import get_conn
+from jobhunt.extract import MODEL as EXTRACT_MODEL
 from jobhunt.extract import extract
 from jobhunt.ocr import ocr as run_ocr
-from jobhunt.report import (daily_check_message, daily_done_message, mark_notified, market_report,
+from jobhunt.report import (HIGH_FIT, daily_check_message, daily_done_message, mark_notified, market_report,
                             notify_new, send)
 
 
@@ -67,12 +73,41 @@ def _all_failed(rep) -> None:
 
 def cmd_extract(args) -> None:
     t = time.time()
-    rep = extract(max_postings=args.max, model=args.model)
-    print(f"[extract] processed={rep.processed} calls={rep.calls} "
+    rep = extract(max_postings=args.max, model=args.model, refit_min=getattr(args, "refit", None))
+    print(f"[extract] processed={rep.processed} rechecked={rep.rechecked} calls={rep.calls} "
           f"errors={len(rep.errors)} ({time.time() - t:.0f}s)")
     for e in rep.errors[:5]:
         print(f"  ! {e}")
     _all_failed(rep)
+    if getattr(args, "skills", False):   # 단독 실행 시 새 기술 표기 분류 + 점수 재계산까지 (daily 는 별도 단계)
+        cmd_skills(argparse.Namespace(all=False, model="sonnet", show=None, pin=None))
+
+
+def cmd_skills(args) -> None:
+    """기술 표기 분류(새 표기 / 보유 기술 변경 시 전체) → 모든 공고 fit_score·gaps 재계산."""
+    with get_conn() as conn:
+        if args.pin:
+            label, _, verdict = args.pin.rpartition("=")
+            if verdict not in ("has", "partial", "none", "na", "auto"):
+                raise SystemExit("--pin 형식: '라벨=has|partial|none|na|auto'")
+            fit.pin(conn, label, verdict)
+            print(f"[skills] 고정: {label} = {verdict}")
+        if args.show:
+            for r in conn.execute(
+                    "SELECT label, pinned FROM skill_labels WHERE verdict=? ORDER BY label COLLATE NOCASE",
+                    (args.show,)):
+                print(f"  {r['label']}{' (고정)' if r['pinned'] else ''}")
+            return
+        t = time.time()
+        rep = fit.classify(conn, model=args.model, force=args.all)
+        rep.rescored = fit.rescore(conn)
+        print(f"[skills] labels={rep.labels} pending={rep.pending} processed={rep.processed} "
+              f"direct={rep.direct} calls={rep.calls} rescored={rep.rescored} "
+              f"errors={len(rep.errors)} ({time.time() - t:.0f}s)")
+        for e in rep.errors[:5]:
+            print(f"  ! {e}")
+        if rep.errors and not rep.processed:
+            raise RuntimeError(f"LLM 호출 {len(rep.errors)}건 모두 실패: {rep.errors[0][:200]}")
 
 
 def cmd_companies(args) -> None:
@@ -167,14 +202,15 @@ def _notify_step(min_score: int) -> None:
 
 def cmd_daily(args) -> None:
     """한 단계가 실패해도 다음 단계는 진행 (예: 수집 실패해도 기존 미분석분 extract).
-    진행 상태는 data/logs/daily_status.json 에 남겨 오전 8시 점검(check)이 읽는다."""
+    진행 상태는 ~/jobhunt-data/logs/daily_status.json 에 남겨 오전 8시 점검(check)이 읽는다."""
     print(f"\n===== daily {time.strftime('%Y-%m-%d %H:%M:%S')} =====")
     batch_status.start()
     steps = {
         "collect": _collect_step,
         "companies": lambda: cmd_companies(argparse.Namespace(max_age=30)),
-        "ocr": lambda: cmd_ocr(argparse.Namespace(max=60, model=args.model)),
-        "extract": lambda: cmd_extract(argparse.Namespace(max=args.max, model=args.model)),
+        "ocr": lambda: cmd_ocr(argparse.Namespace(max=args.max, model=args.model)),
+        "extract": lambda: cmd_extract(argparse.Namespace(max=args.max, model=EXTRACT_MODEL)),   # 정확도 우선 sonnet
+        "skills": lambda: cmd_skills(argparse.Namespace(all=False, model="sonnet", show=None, pin=None)),
         "career": lambda: cmd_career(argparse.Namespace(max=args.max, model=args.model)),
         "dashboard": lambda: cmd_dashboard(argparse.Namespace(open=False)),
         "notify": lambda: _notify_step(args.min_score),
@@ -215,8 +251,17 @@ def main() -> None:
 
     p = sub.add_parser("extract")
     p.add_argument("--max", type=int, default=60, help="이번 회차 최대 분석 건수 (구독 한도 보호)")
-    p.add_argument("--model", default="haiku", help="claude 모델 alias (haiku / sonnet / opus)")
-    p.set_defaults(func=cmd_extract)
+    p.add_argument("--model", default=EXTRACT_MODEL, help="claude 모델 alias (기본 sonnet — 업무 범위 판단 정확도)")
+    p.add_argument("--refit", type=int, default=None, metavar="MIN",
+                   help="경력·목표 수정 후 재분석: 적합도 MIN 이상 + 현재 프로필 버전으로 분석 안 된 것만")
+    p.set_defaults(func=cmd_extract, skills=True)
+
+    p = sub.add_parser("skills")
+    p.add_argument("--all", action="store_true", help="고정값 외 전체 재분류 (기본: 새 표기 + 보유 기술 변경분)")
+    p.add_argument("--model", default="sonnet", help="분류 모델 (호출 수가 적어 sonnet)")
+    p.add_argument("--show", choices=["has", "partial", "none", "na"], help="해당 분류의 표기 목록만 출력 (na=기술 아님)")
+    p.add_argument("--pin", metavar="LABEL=VERDICT", help="분류 직접 고정 (has|partial|none|na, auto=고정 해제)")
+    p.set_defaults(func=cmd_skills)
 
     p = sub.add_parser("companies")
     p.add_argument("--max-age", type=int, default=30, help="이 일수보다 오래된 회사 정보만 다시 받음")
@@ -233,7 +278,7 @@ def main() -> None:
     p.set_defaults(func=cmd_career)
 
     p = sub.add_parser("notify")
-    p.add_argument("--min-score", type=int, default=65)
+    p.add_argument("--min-score", type=int, default=HIGH_FIT)
     p.add_argument("--dry-run", action="store_true", help="보내지 않고 메시지만 출력")
     p.set_defaults(func=cmd_notify)
 
@@ -253,9 +298,10 @@ def main() -> None:
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("daily")
-    p.add_argument("--max", type=int, default=300, help="이번 회차 최대 분석 건수 (남으면 다음 날 이어서)")
-    p.add_argument("--model", default="haiku")
-    p.add_argument("--min-score", type=int, default=70, help="완료 알림에 올릴 고적합 공고 기준")
+    # 새벽 배치라 기본은 상한 없음 (2026-11-04 — 300건 상한에 걸려 신규 공고 분석이 하루씩 밀림)
+    p.add_argument("--max", type=int, default=-1, help="단계별(OCR·분석·커리어) 최대 건수, -1 = 상한 없음 (SQLite LIMIT -1)")
+    p.add_argument("--model", default="haiku", help="OCR·커리어 평가 모델 (공고 분석은 항상 sonnet)")
+    p.add_argument("--min-score", type=int, default=HIGH_FIT, help="완료 알림에 올릴 고적합 공고 기준")
     p.set_defaults(func=cmd_daily)
 
     p = sub.add_parser("check")

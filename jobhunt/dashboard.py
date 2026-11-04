@@ -2,25 +2,77 @@
 
 개인 적합도·갭 데이터라 외부 게시 없이 로컬에서만 본다.
 - server.py 가 요청마다 render() 로 DB 최신 상태를 그려서 응답 (127.0.0.1 전용)
-- build() 는 파일로 떨궈두는 용도 (data/jobhunt_dashboard.html)
+- build() 는 파일로 떨궈두는 용도 (~/jobhunt-data/jobhunt_dashboard.html)
 집계는 브라우저에서 하므로 필터(적합도·직무·기술)에 따라 모든 차트가 같이 바뀐다.
 """
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
 from .career import company_scores
 from .db import DB_PATH, get_conn
-from .report import ROLE_LABEL, _label_key
+from .profile import current_salary
+from .fit import NON_TECH_GAPS   # 기술 외 갭 — 차트에서 기술 갭과 구분해 회색으로 표시
+from .report import HIGH_FIT, ROLE_LABEL, _label_key
 
 OUT_PATH = DB_PATH.parent / "jobhunt_dashboard.html"
 
-# extract.SYSTEM 의 "기술 외 갭" 고정 라벨 — 차트에서 기술 갭과 구분해 회색으로 표시
-NON_TECH_GAPS = ["경력 연차", "석사 이상 학위", "논문 실적", "도메인 경험", "영어", "리더십 경험"]
 SOURCE_LABEL = {"wanted": "원티드", "jobkorea": "잡코리아", "saramin": "사람인"}
+
+# 근무지 점수 (추천도 "근무지" 항목) — 서울 100 / 경기·인천 50 / 그 외 0 / 모름 None
+_CAPITAL = ("경기", "인천")
+_ELSEWHERE = ("부산", "대구", "대전", "광주", "울산", "세종", "강원", "충북", "충남", "전북", "전남", "경북", "경남",
+              "제주", "지방", "해외", "일본", "중국", "미국")
+
+
+def region_score(loc: str | None) -> int | None:
+    first = (loc or "").split(" ", 1)[0]
+    if first.startswith("서울"):
+        return 100
+    if first.startswith(_CAPITAL):
+        return 50
+    if first.startswith(_ELSEWHERE):
+        return 0
+    return None
+
+
+# 공고 연봉 원문 → 만원 단위. "3,600만원", "5천만원 ~ 1억원", "1억 5,000만 원", "월 300만원"
+_MONEY_RE = re.compile(r"(\d+(?:\.\d+)?)\s*억(?:\s*([\d,]+)\s*(천)?\s*만)?|([\d,]+(?:\.\d+)?)\s*(천)?\s*만")
+
+
+def parse_salary(text: str | None) -> tuple[int | None, int | None]:
+    """(하한, 상한) 만원. "N 이상" 처럼 상한이 열려 있으면 상한 None. 금액이 없으면 (None, None)."""
+    vals = []
+    for m in _MONEY_RE.finditer(text or ""):
+        if m.group(1):
+            v = float(m.group(1)) * 10000 + (float(m.group(2).replace(",", "")) * (1000 if m.group(3) else 1)
+                                             if m.group(2) else 0)
+        else:
+            v = float(m.group(4).replace(",", "")) * (1000 if m.group(5) else 1)
+        if re.search(r"월\s*(?:급여|평균)?\s*$", text[max(0, m.start() - 6):m.start()]):
+            v *= 12
+        if v >= 1000:   # 그보다 작으면 수당·보너스 등
+            vals.append(round(v))
+    if not vals:
+        return None, None
+    lo, hi = min(vals), max(vals)
+    if len(vals) == 1 and re.search(r"이상", text or ""):
+        hi = None
+    return lo, hi
+
+
+def salary_score(lo: int | None, hi: int | None, current: int | None) -> int | None:
+    """현재 연봉 대비 — 상한(협상 여지) 기준. 미달이어도 빼지 않고 추천도에서 밀리게만.
+    현 연봉 미만 0 / 인상 10% 미만 40 / 10~20% 75 / 20%+ 100 / 판단 불가 None."""
+    if current is None or lo is None:
+        return None
+    if hi is None:   # 상한이 열려 있으면 하한이 충분히 높을 때만 판단
+        return 100 if lo >= current * 1.2 else 75 if lo >= current * 1.1 else None
+    return 0 if hi < current else 40 if hi < current * 1.1 else 75 if hi < current * 1.2 else 100
 
 
 def _load() -> dict:
@@ -90,9 +142,16 @@ def _load() -> dict:
         return {"depth": r["depth"], "breadth": r["breadth"], "ai": r["ai_core"],
                 "ben": r["benefits"], "note": r["growth_note"], "why": r["career_reason"]}
 
+    cur_sal = current_salary()
+
+    def salary(r) -> dict:
+        lo, hi = parse_salary(r["salary_text"])
+        return {"salLo": lo, "salHi": hi, "salS": salary_score(lo, hi, cur_sal)}
+
     postings = [{
+        **salary(r),
         "id": r["id"], "src": r["source"], "u": r["url"], "t": r["title"], "c": r["company"],
-        "loc": r["location"], "due": r["due_date"], "seen": (r["first_seen_at"] or "")[:10],
+        "loc": r["location"], "reg": region_score(r["location"]), "due": r["due_date"], "seen": (r["first_seen_at"] or "")[:10],
         "r": r["role_type"] or "other", "sum": r["summary"], "d": r["domain"],
         "eng": bool(r["english_required"]), "sal": r["salary_text"], "s": r["fit_score"] or 0,
         "why": r["fit_reason"], "req": norm(r["required_skills"]),
@@ -108,27 +167,34 @@ def _load() -> dict:
         "roles": ROLE_LABEL,
         "sources": SOURCE_LABEL,
         "nonTech": NON_TECH_GAPS,
+        "highFit": HIGH_FIT,
         "postings": postings,
     }
 
 
 def version() -> str:
-    """데이터가 바뀌었는지 판단용 지문 — 열어둔 페이지가 주기적으로 비교해 새로고침 안내."""
+    """데이터가 바뀌었는지 판단용 지문 — 열어둔 페이지가 주기적으로 비교해 바뀌었으면 /api/data 로 다시 받음.
+    점수 합·분류 시각은 기술분류 재계산(fit.rescore)처럼 분석 시각은 그대로인데 점수만 바뀌는 경우용."""
     with get_conn() as conn:
         r = conn.execute(
             """SELECT (SELECT MAX(last_seen_at) FROM postings),
                       (SELECT COUNT(*) FROM postings WHERE status='open'),
                       (SELECT MAX(extracted_at) FROM insights),
                       (SELECT COUNT(*) FROM insights),
+                      (SELECT SUM(fit_score) FROM insights),
+                      (SELECT MAX(classified_at) FROM skill_labels),
                       (SELECT COUNT(*) FROM career),
                       (SELECT MAX(fetched_at) FROM companies)"""
         ).fetchone()
     return "|".join(str(x) for x in r)
 
 
+def data_json() -> str:
+    return json.dumps(_load(), ensure_ascii=False)
+
+
 def render() -> str:
-    data = json.dumps(_load(), ensure_ascii=False).replace("</", "<\\/")
-    return _TEMPLATE.replace("__DATA__", data)
+    return _TEMPLATE.replace("__DATA__", data_json().replace("</", "<\\/"))
 
 
 def build(out_path: Path = OUT_PATH) -> Path:
@@ -249,8 +315,6 @@ button.btn { border: 1px solid var(--axis); background: var(--surface); color: v
 .meter i { width: 8px; height: 8px; border-radius: 2px; background: var(--grid); }
 .meter i.on { background: var(--series-1); }
 td.sc.dim { color: var(--muted); font-size: 13px; }
-.banner { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: var(--wash); border: 1px solid var(--series-1);
-  border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -259,8 +323,6 @@ td.sc.dim { color: var(--muted); font-size: 13px; }
     <h1>jobhunt 대시보드</h1>
     <span class="sub" id="gen"></span>
   </header>
-
-  <div class="banner" id="newdata" hidden>새 데이터가 들어왔어요 (매일 배치 반영). <button class="btn" onclick="location.reload()">새로고침</button></div>
 
   <section class="tiles" id="tiles"></section>
 
@@ -278,56 +340,45 @@ td.sc.dim { color: var(--muted); font-size: 13px; }
   </div>
 
   <details class="card weights" id="wpanel" hidden>
-    <summary>추천도 가중치 — 무엇을 중시할지 조절 (<span id="wsum"></span>)</summary>
-    <p class="desc">추천도 = 아래 항목 점수(0~100)의 가중 평균. 정보가 없는 항목은 빼고 계산해요.
-      포지션 항목은 LLM이 공고 본문을 읽고 매긴 값, 회사 항목은 원티드 회사 태그(연봉 백분위·투자·퇴사율·복지)와
-      사람인·잡코리아 기업정보(사원수·매출액·영업이익·매출 증가율·기업형태)로 계산한 값이에요. 원티드 회사의 재무는 사람인에서 이름+설립연도로 찾아 채워요.</p>
+    <summary>추천도 가중치 (<span id="wsum"></span>)</summary>
     <div class="wg" id="wgrid"></div>
     <p class="desc"><button class="btn" id="wreset">기본값으로</button></p>
   </details>
 
   <div class="grid">
     <section class="card wide">
-      <h2>내 부족한 점 TOP 20 <span class="sub" id="gapscope"></span></h2>
-      <p class="desc">필터된 공고 중 이 항목이 부족하다고 나온 비율. <b>단독</b> = 이것만 채우면 부족한 점이 없어지는 공고 수. 항목을 누르면 아래 목록이 그 항목으로 걸러져요.</p>
+      <h2>내 부족한 점 TOP 20</h2>
       <div class="bars" id="gaps"></div>
       <div class="legend"><span><i style="background:var(--series-1)"></i>기술 (준비로 채울 수 있음)</span><span><i style="background:var(--neutral-bar)"></i>기술 외 (경력·학위·도메인 등)</span></div>
     </section>
     <section class="card">
       <h2>필수 기술 TOP 15</h2>
-      <p class="desc">필터된 공고 중 자격요건에 나온 비율</p>
       <div class="bars" id="req"></div>
     </section>
     <section class="card">
       <h2>우대 기술 TOP 15</h2>
-      <p class="desc">필터된 공고 중 우대사항에 나온 비율</p>
       <div class="bars" id="pref"></div>
     </section>
     <section class="card">
       <h2 id="histtitle">적합도 분포</h2>
-      <p class="desc">직무·검색 필터 기준. 회색 = 점수 하한 미만이라 집계에서 빠진 구간</p>
       <div class="hist" id="hist"></div>
       <div class="hist-x" id="histx"></div>
     </section>
     <section class="card">
       <h2>직무 유형</h2>
-      <p class="desc">적합도·검색 필터 기준. 회색 = 직무 필터에서 꺼진 유형</p>
       <div class="bars" id="rolebars"></div>
     </section>
     <section class="card">
       <h2>도메인 TOP 10</h2>
-      <p class="desc">필터된 공고의 산업 분야</p>
       <div class="bars" id="domains"></div>
     </section>
     <section class="card">
       <h2>회사 TOP 10</h2>
-      <p class="desc">필터된 공고가 많은 회사</p>
       <div class="bars" id="companies"></div>
     </section>
 
     <section class="card wide">
       <h2 id="listtitle">공고 목록</h2>
-      <p class="desc">행을 누르면 요약·적합도 이유·기술이 펼쳐져요. 제목은 해당 사이트 공고 링크예요. 같은 공고가 여러 사이트에 있으면 하나로 묶어 보여줘요.</p>
       <div class="tablewrap">
         <table>
           <thead><tr>
@@ -344,9 +395,10 @@ td.sc.dim { color: var(--muted); font-size: 13px; }
 
 <script type="application/json" id="data">__DATA__</script>
 <script>
-const D = JSON.parse(document.getElementById('data').textContent);
-const P = D.postings;
-const NT = new Set(D.nonTech);
+// 서버로 열었을 때는 데이터가 바뀌면 refreshData() 가 통째로 교체 (필터·페이지·스크롤 유지)
+let D = JSON.parse(document.getElementById('data').textContent);
+let P = D.postings;
+let NT = new Set(D.nonTech);
 const ROLE_ORDER = ['llm_app', 'ai_fullstack', 'ml_engineer', 'backend', 'data', 'research', 'other'];
 const DEFAULT_ROLES = ['llm_app', 'ai_fullstack', 'ml_engineer', 'backend', 'data'];
 const PAGE = 100;
@@ -358,15 +410,17 @@ const COMPONENTS = [
   { k: 'depth',  name: '전문성 성장',        grp: '포지션', v: (p) => L5(p.car?.depth) },
   { k: 'breadth', name: '업무 범위·리드 경로', grp: '포지션', v: (p) => L5(p.car?.breadth) },
   { k: 'ai',     name: 'AI 핵심도',          grp: '포지션', v: (p) => L5(p.car?.ai) },
-  { k: 'pay',    name: '연봉 수준',          grp: '회사',   v: (p) => p.co?.pay ?? null },
+  // 공고에 금액이 있으면 내 현재 연봉 대비 점수(미달 0), 없으면 회사 연봉 순위
+  { k: 'pay',    name: '연봉 수준',          grp: '회사',   v: (p) => p.salS ?? p.co?.pay ?? null },
   { k: 'welfare', name: '보상·복지',         grp: '회사',   v: (p) => {
       const xs = [L5(p.car?.ben), p.co ? Math.min(100, 15 + p.co.welfare.length * 7) : null].filter((x) => x != null);
       return xs.length ? xs.reduce((a, b) => a + b) / xs.length : null; } },
   { k: 'size',   name: '회사 규모(사원수)',   grp: '회사',   v: (p) => p.co?.size ?? null },
   { k: 'rev',    name: '매출 규모',          grp: '회사',   v: (p) => p.co?.revenue ?? null },
   { k: 'stab',   name: '안정성·성장',        grp: '회사',   v: (p) => p.co?.stability ?? null },
+  { k: 'reg',    name: '근무지 (서울)',       grp: '회사',   v: (p) => p.reg },   // 서울 100 / 경기·인천 50 / 그 외 0
 ];
-const DEFAULT_W = { depth: 25, breadth: 15, ai: 15, pay: 15, welfare: 10, size: 10, rev: 10, stab: 10 };
+const DEFAULT_W = { depth: 25, breadth: 15, ai: 15, pay: 15, welfare: 10, size: 10, rev: 10, stab: 10, reg: 10 };
 
 const st = {
   mode: 'fit', min: 50, roles: new Set(DEFAULT_ROLES), srcs: new Set(Object.keys(D.sources)), noeng: false, q: '', skill: null,
@@ -444,7 +498,7 @@ function bars(el, entries, total, { top = 15, cls = () => '', extra = null, clic
 }
 
 function renderTiles(list) {
-  const hi = P.filter((p) => p.s >= 75).length;
+  const hi = P.filter((p) => p.s >= D.highFit).length;
   const rated = P.filter((p) => p.car).length;
   const lastSeen = P.reduce((m, p) => p.seen > m ? p.seen : m, '');
   const recent = P.filter((p) => p.seen >= daysAgo(7)).length;
@@ -452,12 +506,11 @@ function renderTiles(list) {
   $('tiles').innerHTML = [
     ['수집 중인 공고', D.counts.open.toLocaleString(), bySrc],
     ['관심 공고', D.counts.matched.toLocaleString(),
-      `1차 필터 통과 · 중복 ${D.counts.dups}건 묶음 · 이미지 공고 ${D.counts.imageOnly}건 분석 제외`],
-    ['LLM 분석 완료', P.length.toLocaleString(), `관심 공고의 ${pct(P.length, D.counts.matched)}`],
-    ['커리어 평가 완료', rated.toLocaleString(), `추천도 계산 가능 (${pct(rated, P.length)})`],
-    ['적합도 75+', hi.toLocaleString(), '바로 볼 만한 공고'],
-    ['최근 7일 신규', recent.toLocaleString(), `가장 최근 신규 ${lastSeen || '-'}`],
-    ['현재 필터', list.length.toLocaleString(), '아래 차트·목록 기준'],
+      `직무·연차 필터 통과 · 중복 ${D.counts.dups}건 묶음`],
+    ['LLM 분석 완료', P.length.toLocaleString(), pct(P.length, D.counts.matched)],
+    ['커리어 평가 완료', rated.toLocaleString(), pct(rated, P.length)],
+    [`적합도 ${D.highFit}+`, hi.toLocaleString(), ''],
+    ['최근 7일 신규', recent.toLocaleString(), `최근 ${lastSeen || '-'}`],
   ].map(([k, v, n]) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="n">${esc(n)}</div></div>`).join('');
 }
 function daysAgo(n) {
@@ -470,10 +523,11 @@ function renderGaps(list) {
   // 단독 = 그 항목이 유일한 부족한 점인 공고 수
   const solo = new Map();
   for (const p of list) if (p.gaps.length === 1) solo.set(p.gaps[0], (solo.get(p.gaps[0]) || 0) + 1);
-  $('gapscope').textContent = `— ${st.mode === 'rec' ? '추천도' : '적합도'} ${st.min}점 이상 공고 ${list.length}건 기준`;
   bars($('gaps'), entries, list.length, {
     top: 20, cls: (k) => NT.has(k) ? 'nt' : '',
     extra: (k) => solo.get(k) ? ` · 단독 ${solo.get(k)}` : '',
+    title: (k, v) => `${k}: ${v}건 / ${list.length}건 (${pct(v, list.length)})` +
+      (solo.get(k) ? ` · 단독 ${solo.get(k)}건 = 이것만 채우면 부족한 점이 없어지는 공고` : ''),
   });
 }
 
@@ -516,9 +570,10 @@ function renderTable(list) {
   $('rows').innerHTML = view.map((p) => {
     const gaps = p.gaps.map((g) => `<span class="tag ${NT.has(g) ? 'nt' : 'g'}">${esc(g)}</span>`).join('') || '<span class="tag">없음</span>';
     const main = `<tr class="p" data-id="${p.id}">
-      <td class="sc ${p.s >= 75 ? 'hi' : ''} ${st.mode === 'rec' ? 'dim' : ''}">${p.s}</td>
+      <td class="sc ${p.s >= D.highFit ? 'hi' : ''} ${st.mode === 'rec' ? 'dim' : ''}">${p.s}</td>
       <td class="sc ${p.rec >= 70 ? 'hi' : ''} ${st.mode === 'fit' ? 'dim' : ''}" title="${p.rec == null ? '커리어 평가 전' : ''}">${p.rec ?? '-'}</td>
-      <td class="t"><a href="${esc(p.u)}" target="_blank" rel="noopener">${esc(p.t)}</a>${p.eng ? ' <span class="tag">영어 필수</span>' : ''}<div class="co">${esc(p.c)}${p.loc ? ' · ' + esc(p.loc) : ''}
+      <td class="t"><a href="${esc(p.u)}" target="_blank" rel="noopener">${esc(p.t)}</a>${p.eng ? ' <span class="tag">영어 필수</span>' : ''}${
+        p.salS === 0 ? ' <span class="tag">연봉 미달</span>' : p.salS === 40 ? ' <span class="tag">인상 10% 미만</span>' : ''}<div class="co">${esc(p.c)}${p.loc ? ' · ' + esc(p.loc) : ''}
         · <span class="tag">${esc(D.sources[p.src] || p.src)}</span>${p.also.map(([s, u]) =>
           `<a class="tag" href="${esc(u)}" target="_blank" rel="noopener" title="같은 공고">${esc(D.sources[s] || s)}</a>`).join('')}</div></td>
       <td>${esc(roleName(p.r))}</td>
@@ -630,7 +685,11 @@ function render() {
   renderTable(list);
 }
 
-$('gen').textContent = `생성 ${D.generated} · 분석 ${P.length}건 · 데이터는 이 파일 안에만 있어요`;
+const LIVE = location.protocol.startsWith('http');   // 로컬 서버(serve)로 열었는지, 파일로 열었는지
+function renderGen() {
+  $('gen').textContent = `${D.generated} 기준`;
+}
+renderGen();
 $('fmin').addEventListener('input', (e) => { st.min = +e.target.value; st.page = 0; render(); });
 $('noeng').addEventListener('change', (e) => { st.noeng = e.target.checked; st.page = 0; render(); });
 $('q').addEventListener('input', (e) => { st.q = e.target.value.trim(); st.page = 0; render(); });
@@ -661,14 +720,24 @@ renderWeights();
 computeRec();
 render();
 
-// 로컬 서버로 열었을 때만: 5분마다 데이터 지문을 비교해 바뀌었으면 새로고침 안내
-if (location.protocol.startsWith('http')) {
-  setInterval(async () => {
-    try {
-      const v = await (await fetch('/api/version', { cache: 'no-store' })).text();
-      if (v && v !== D.version) $('newdata').hidden = false;
-    } catch (e) {}
-  }, 5 * 60 * 1000);
+// 로컬 서버로 열었을 때만: 5분마다(+ 탭으로 돌아올 때) 데이터 지문을 비교해 바뀌었으면 새 데이터로 다시 그림
+async function refreshData() {
+  try {
+    const v = await (await fetch('/api/version', { cache: 'no-store' })).text();
+    if (!v || v === D.version || v.startsWith('error')) return;
+    const res = await fetch('/api/data', { cache: 'no-store' });
+    if (!res.ok) return;   // 배치가 DB 를 쓰는 중이면 다음 회차에
+    D = await res.json(); P = D.postings; NT = new Set(D.nonTech);
+    const ids = new Set(P.map((p) => p.id));
+    for (const id of [...st.open]) if (!ids.has(id)) st.open.delete(id);   // 마감돼 빠진 공고의 펼침 상태 정리
+    const y = window.scrollY;
+    computeRec(); render(); window.scrollTo(0, y);
+    renderGen();
+  } catch (e) {}
+}
+if (LIVE) {
+  setInterval(refreshData, 5 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshData(); });
 }
 </script>
 </body>

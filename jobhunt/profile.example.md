@@ -1,12 +1,20 @@
 # 지원자 프로필 (예시 — 실제 내용은 private/profile.md 에 작성)
 
+연차 (지원 시점 기준): 전체 개발 N년 / AI 실무 N년 / 백엔드 실무 N년 / 프론트엔드 N년
+(LLM 이 공고 요구 연차와 직무 분야별로 비교하는 값 — 날짜 계산을 LLM 에 맡기지 않으려고 미리 적는다)
+
 ## 경력
 - 웹 퍼블리싱·프론트엔드 N년
-- AI 개발 N년 (현 직장)
+- AI 개발 N년 (현 직장) — 어떤 서비스를 어디부터 어디까지 만들었는지
 
-## 기술
-- Python, FastAPI / Java, Spring Boot / React
-- RAG, LLM, Elasticsearch
+## 보유 기술
+(코드 매칭 전용 — LLM 에 안 보냄. 공고 기술 표기와 같은 영문 라벨로, 쉼표 구분. 일부 = 절반만 인정 + 갭에 표시)
+- 보유: Python, FastAPI, Java, Spring Boot, React, RAG, LLM, Elasticsearch
+- 일부: AWS
+
+## 연봉
+(코드 전용 — LLM 에 안 보냄. 공고 금액이 이것보다 낮으면 추천도에서 밀림, 10~20% 이상 높을수록 가점)
+- 현재: 4,000만원
 
 ## 목표 포지션
 - AI 엔지니어, LLM 애플리케이션 개발, AI 풀스택

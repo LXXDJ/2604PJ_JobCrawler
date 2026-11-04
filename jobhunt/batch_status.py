@@ -1,4 +1,4 @@
-"""매일 배치 진행 상태 — data/logs/daily_status.json 한 파일에 덮어쓴다.
+"""매일 배치 진행 상태 — ~/jobhunt-data/logs/daily_status.json 한 파일에 덮어쓴다.
 
 배치(daily)가 단계 시작·진행·실패·완료를 기록하고, 오전 8시 점검(check)이 이 파일을 읽어
 "진행 중 / 오류 / 미실행" 을 판정한다. progress() 는 daily 밖(단독 실행)에서 부르면 아무것도 안 한다.
@@ -9,12 +9,13 @@ import ctypes
 import json
 import os
 from datetime import datetime
-from pathlib import Path
 
-STATUS_PATH = Path(__file__).resolve().parents[1] / "data" / "logs" / "daily_status.json"
+from .db import LOG_DIR
+
+STATUS_PATH = LOG_DIR / "daily_status.json"
 
 STEPS = [("collect", "수집"), ("companies", "회사정보"), ("ocr", "이미지"), ("extract", "공고분석"),
-         ("career", "커리어"), ("dashboard", "대시보드"), ("notify", "알림")]
+         ("skills", "기술분류"), ("career", "커리어"), ("dashboard", "대시보드"), ("notify", "알림")]
 STEP_LABEL = dict(STEPS)
 
 _active = False

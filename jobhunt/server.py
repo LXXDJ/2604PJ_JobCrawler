@@ -1,7 +1,7 @@
 """로컬 대시보드 서버 — 127.0.0.1 전용. 요청마다 DB 최신 상태로 그려서 응답.
 
-매일 배치(run daily)가 DB 를 갱신하면 새로고침만으로 반영된다.
-열어둔 페이지는 /api/version 을 주기적으로 비교해 새 데이터 안내를 띄운다.
+열어둔 페이지는 /api/version 을 주기적으로 비교해, 바뀌었으면 /api/data(JSON)를 받아
+새로고침 없이 다시 그린다 (필터·페이지·스크롤 유지).
 """
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(200, dashboard.render(), "text/html; charset=utf-8")
             elif path == "/api/version":
                 self._send(200, dashboard.version(), "text/plain; charset=utf-8")
+            elif path == "/api/data":
+                self._send(200, dashboard.data_json(), "application/json; charset=utf-8")
             else:
                 self._send(404, "not found", "text/plain; charset=utf-8")
         except Exception as e:  # 배치가 DB 를 쓰는 중이라 잠깐 실패해도 서버는 살아 있게
