@@ -1,4 +1,19 @@
-# JobCrawler 프로젝트 구조 설명
+# JobCrawler
+
+이 저장소에는 두 프로젝트가 있다.
+
+| | 팀 크롤러 (step3) | jobhunt — 개인 이직 파이프라인 (step4) |
+|---|---|---|
+| 목적 | 해외 취업·공공 채용 사이트 1,500곳 공고를 자동 수집 | 원티드·잡코리아·사람인 AI·개발 공고 수집 → LLM 분석 → 내 적합도·추천도 |
+| 코드 | `crawlers/`, `scripts/ops·db·debug/`, `dashboard/` | `jobhunt/`, `scripts/jobhunt/` |
+| 데이터 | `data/crawler.db` | `~/jobhunt-data/jobhunt.db` (프로젝트 밖) |
+| 문서 | 이 문서 아래 내용 | **[jobhunt/README.md](jobhunt/README.md)** |
+
+`step4/*` 브랜치의 주 작업은 jobhunt 다. DB 는 따로 쓰고, jobhunt 는 팀 크롤러의 `.env` 로딩·Slack 전송(`crawlers/infra`)만 가져다 쓴다.
+
+---
+
+# 팀 크롤러 (step3) 구조 설명
 
 ## 1. 큰 그림 — 두 단계로 나뉘어 있음
 
