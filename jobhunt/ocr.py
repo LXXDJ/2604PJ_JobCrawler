@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import base64
 import io
 import json
 import tempfile
@@ -37,13 +38,21 @@ class OcrReport:
     errors: list[str] = field(default_factory=list)
 
 
+# 이미지 요청임을 밝혀야 함 — ifh.cc·imgur 같은 외부 호스팅은 일반 요청에 이미지 대신 HTML 뷰어 페이지를 준다 (2026-11-04)
+_IMG_HEADERS = {"Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8", "Sec-Fetch-Dest": "image"}
+
+
 def _download(s: requests.Session, page_url: str, src: str) -> Image.Image | None:
-    url = "https:" + src if src.startswith("//") else urljoin(page_url, src)
-    r = s.get(url, headers={"Referer": page_url}, timeout=30)
-    if r.status_code != 200:
-        return None
+    if src.startswith("data:image/"):   # 본문에 base64 로 박힌 이미지 (잡코리아 일부)
+        content = base64.b64decode(src.split(",", 1)[1])
+    else:
+        url = "https:" + src if src.startswith("//") else urljoin(page_url, src)
+        r = s.get(url, headers={"Referer": page_url, **_IMG_HEADERS}, timeout=30)
+        if r.status_code != 200:
+            return None
+        content = r.content
     try:
-        im = Image.open(io.BytesIO(r.content)).convert("RGB")
+        im = Image.open(io.BytesIO(content)).convert("RGB")
     except Exception:  # noqa: BLE001  이미지가 아닌 응답
         return None
     return im if min(im.size) >= MIN_SIDE else None
