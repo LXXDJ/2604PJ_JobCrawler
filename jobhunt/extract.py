@@ -93,18 +93,27 @@ def _clip(text: str | None, n: int = _BODY_LIMIT) -> str:
     return text if len(text) <= n else text[:n] + " …(생략)"
 
 
+# LLM 에 보낼 본문이 있는 공고만 — 이미지 통짜 공고(텍스트 거의 없음)는 제목만으로 분석하면 틀리므로 제외
+ANALYZABLE_SQL = ("(p.main_tasks IS NOT NULL OR p.requirements IS NOT NULL"
+                  " OR length(coalesce(p.body, '')) >= 150)")
+
+
 def _render(row) -> str:
-    return "\n".join([
+    head = [
         f"### posting_id={row['id']}",
         f"제목: {row['title']}",
         f"회사: {row['company']} ({row['company_industry'] or '-'}) / 위치: {row['location'] or '-'}",
         f"표기 경력: {row['years_from']}~{row['years_to']}년 / 기술태그: {row['skill_tags'] or '[]'}",
-        f"[회사소개]\n{_clip(row['intro'], 600)}",
-        f"[주요업무]\n{_clip(row['main_tasks'])}",
-        f"[자격요건]\n{_clip(row['requirements'])}",
-        f"[우대사항]\n{_clip(row['preferred'])}",
-        f"[혜택]\n{_clip(row['benefits'], 400)}",
-    ])
+    ]
+    if row["main_tasks"] or row["requirements"]:   # 원티드 — 섹션별
+        return "\n".join(head + [
+            f"[회사소개]\n{_clip(row['intro'], 600)}",
+            f"[주요업무]\n{_clip(row['main_tasks'])}",
+            f"[자격요건]\n{_clip(row['requirements'])}",
+            f"[우대사항]\n{_clip(row['preferred'])}",
+            f"[혜택]\n{_clip(row['benefits'], 400)}",
+        ])
+    return "\n".join(head + [f"[공고 본문]\n{_clip(row['body'], 4000)}"])   # 사람인·잡코리아 — 통짜
 
 
 def extract(*, max_postings: int = 60, model: str = llm.DEFAULT_MODEL) -> ExtractReport:
@@ -114,6 +123,7 @@ def extract(*, max_postings: int = 60, model: str = llm.DEFAULT_MODEL) -> Extrac
         rows = conn.execute(
             """SELECT p.* FROM postings p LEFT JOIN insights i ON i.posting_id = p.id
                WHERE p.matched=1 AND p.status='open' AND p.detail_fetched_at IS NOT NULL
+                 AND p.dup_of IS NULL AND """ + ANALYZABLE_SQL + """
                  AND i.posting_id IS NULL
                ORDER BY p.first_seen_at DESC, p.id DESC
                LIMIT ?""",

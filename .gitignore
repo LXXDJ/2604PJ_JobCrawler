@@ -14,6 +14,8 @@ data/*.db
 data/*.csv
 data/*.json
 data/*.txt
+data/jobhunt_dashboard.html
+data/logs/
 data/media/
 !data/.gitkeep
 
