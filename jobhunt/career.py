@@ -12,7 +12,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from . import llm
+from . import batch_status, llm
 from .db import get_conn
 
 BATCH_SIZE = 8
@@ -131,6 +131,7 @@ def evaluate(*, max_postings: int = 80, model: str = llm.DEFAULT_MODEL) -> Caree
                 )
                 rep.processed += 1
             conn.commit()
+            batch_status.progress(min(i + BATCH_SIZE, len(rows)), len(rows))
     return rep
 
 

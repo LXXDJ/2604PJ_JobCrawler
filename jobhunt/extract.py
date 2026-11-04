@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from . import llm, profile
+from . import batch_status, llm, profile
 from .db import get_conn
 
 BATCH_SIZE = 6
@@ -159,4 +159,5 @@ def extract(*, max_postings: int = 60, model: str = llm.DEFAULT_MODEL) -> Extrac
                 )
                 rep.processed += 1
             conn.commit()
+            batch_status.progress(min(i + BATCH_SIZE, len(rows)), len(rows))
     return rep

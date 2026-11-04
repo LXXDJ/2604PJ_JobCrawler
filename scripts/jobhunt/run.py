@@ -13,7 +13,8 @@
   python -m scripts.jobhunt.run companies            # 회사 태그(인원·연봉 백분위·투자 등) 갱신
   python -m scripts.jobhunt.run ocr --max 40         # 이미지 통짜 공고 → 텍스트 (claude -p + Read)
   python -m scripts.jobhunt.run career --max 80      # 커리어 관점 포지션 평가 (추천도용, claude -p)
-  python -m scripts.jobhunt.run daily [--max 300]    # 매일 배치: collect → companies → ocr → extract → career → notify → dashboard
+  python -m scripts.jobhunt.run daily [--max 300]    # 매일 배치(00:00): collect → companies → ocr → extract → career → dashboard → 완료 알림
+  python -m scripts.jobhunt.run check [--dry-run]    # 08:00 점검: 배치가 안 끝났으면 진행 중 / 오류 / 미실행 Slack 알림
 
 작업 스케줄러에서는 pythonw.exe 로 실행 → 출력은 data/logs/jobhunt.log 로 간다.
 """
@@ -34,13 +35,14 @@ if sys.stdout is None:   # pythonw (작업 스케줄러) — 콘솔이 없으니
 else:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-from jobhunt import dashboard, server
+from jobhunt import batch_status, dashboard, server
 from jobhunt.career import evaluate
 from jobhunt.collect import SOURCES, collect, refresh_companies
 from jobhunt.db import get_conn
 from jobhunt.extract import extract
 from jobhunt.ocr import ocr as run_ocr
-from jobhunt.report import WEBHOOK, market_report, notify_new
+from jobhunt.report import (daily_check_message, daily_done_message, mark_notified, market_report,
+                            notify_new, send)
 
 
 def cmd_collect(args) -> None:
@@ -54,6 +56,13 @@ def cmd_collect(args) -> None:
           f"details={rep.details_fetched} errors={len(rep.errors)} ({time.time() - t:.0f}s)")
     for e in rep.errors[:5]:
         print(f"  ! {e}")
+    return rep
+
+
+def _all_failed(rep) -> None:
+    """LLM 단계에서 처리 0건 + 오류만 있으면 (구독 한도·로그인 만료 등) 단계 실패로 본다."""
+    if rep.errors and not rep.processed:
+        raise RuntimeError(f"LLM 호출 {len(rep.errors)}건 모두 실패: {rep.errors[0][:200]}")
 
 
 def cmd_extract(args) -> None:
@@ -63,6 +72,7 @@ def cmd_extract(args) -> None:
           f"errors={len(rep.errors)} ({time.time() - t:.0f}s)")
     for e in rep.errors[:5]:
         print(f"  ! {e}")
+    _all_failed(rep)
 
 
 def cmd_companies(args) -> None:
@@ -80,6 +90,7 @@ def cmd_ocr(args) -> None:
           f"errors={len(rep.errors)} ({time.time() - t:.0f}s)")
     for e in rep.errors[:5]:
         print(f"  ! {e}")
+    _all_failed(rep)
 
 
 def cmd_career(args) -> None:
@@ -89,6 +100,7 @@ def cmd_career(args) -> None:
           f"errors={len(rep.errors)} ({time.time() - t:.0f}s)")
     for e in rep.errors[:5]:
         print(f"  ! {e}")
+    _all_failed(rep)
 
 
 def cmd_notify(args) -> None:
@@ -131,25 +143,65 @@ def cmd_serve(args) -> None:
     server.serve(args.port)
 
 
+def _collect_step() -> None:
+    rep = cmd_collect(argparse.Namespace(pages=None, source=None))
+    if not rep.per_source:
+        raise RuntimeError(f"모든 사이트 목록 수집 실패: {rep.errors[0] if rep.errors else '-'}")
+    batch_status.update(collect={
+        "new_matched": sum(s["new_matched"] for s in rep.per_source.values()),
+        "closed": sum(s["closed"] for s in rep.per_source.values()) + rep.closed_expired,
+    })
+
+
+def _notify_step(min_score: int) -> None:
+    """앞 단계가 모두 성공했을 때만 완료 알림. 실패가 있으면 오전 8시 점검이 오류 알림을 보낸다."""
+    st = batch_status.load()
+    if st.get("failures"):
+        print("[notify] 실패한 단계가 있어 완료 알림 생략 — 08:00 점검에서 오류 알림")
+        return
+    msg, ids = daily_done_message(st, min_score=min_score)
+    send(msg)
+    mark_notified(ids)
+    print(f"[notify] 완료 알림 전송 (고적합 {len(ids)}건)")
+
+
 def cmd_daily(args) -> None:
-    """한 단계가 실패해도 다음 단계는 진행 (예: 수집 실패해도 기존 미분석분 extract)."""
+    """한 단계가 실패해도 다음 단계는 진행 (예: 수집 실패해도 기존 미분석분 extract).
+    진행 상태는 data/logs/daily_status.json 에 남겨 오전 8시 점검(check)이 읽는다."""
     print(f"\n===== daily {time.strftime('%Y-%m-%d %H:%M:%S')} =====")
-    steps = [
-        ("collect", lambda: cmd_collect(argparse.Namespace(pages=None, source=None))),
-        ("companies", lambda: cmd_companies(argparse.Namespace(max_age=30))),
-        ("ocr", lambda: cmd_ocr(argparse.Namespace(max=60, model=args.model))),
-        ("extract", lambda: cmd_extract(argparse.Namespace(max=args.max, model=args.model))),
-        ("career", lambda: cmd_career(argparse.Namespace(max=args.max, model=args.model))),
-        ("notify", lambda: cmd_notify(argparse.Namespace(min_score=args.min_score, dry_run=False))
-            if WEBHOOK else print("[notify] JOBHUNT_SLACK_WEBHOOK_URL 없음 — 건너뜀")),
-        ("dashboard", lambda: cmd_dashboard(argparse.Namespace(open=False))),
-    ]
-    for name, fn in steps:
+    batch_status.start()
+    steps = {
+        "collect": _collect_step,
+        "companies": lambda: cmd_companies(argparse.Namespace(max_age=30)),
+        "ocr": lambda: cmd_ocr(argparse.Namespace(max=60, model=args.model)),
+        "extract": lambda: cmd_extract(argparse.Namespace(max=args.max, model=args.model)),
+        "career": lambda: cmd_career(argparse.Namespace(max=args.max, model=args.model)),
+        "dashboard": lambda: cmd_dashboard(argparse.Namespace(open=False)),
+        "notify": lambda: _notify_step(args.min_score),
+    }
+    for name, _ in batch_status.STEPS:
+        batch_status.step(name)
         try:
-            fn()
+            steps[name]()
+            batch_status.step_ok(name)
         except Exception as e:
             print(f"[{name}] 실패: {type(e).__name__}: {e}")
+            batch_status.step_failed(name, f"{type(e).__name__}: {e}")
+    batch_status.finish()
     print(f"===== done {time.strftime('%H:%M:%S')} =====")
+
+
+def cmd_check(args) -> None:
+    """오전 8시 점검 — 오늘 배치가 정상 완료되지 않았으면 진행 중 / 오류 / 미실행 알림."""
+    msg = daily_check_message()
+    if not msg:
+        print("[check] 오늘 배치 정상 완료 — 알림 없음")
+        return
+    if args.dry_run:
+        print(msg)
+        return
+    send(msg)
+    print(f"[check] 점검 알림 전송: {msg.splitlines()[0]}")
 
 
 def main() -> None:
@@ -203,8 +255,12 @@ def main() -> None:
     p = sub.add_parser("daily")
     p.add_argument("--max", type=int, default=300, help="이번 회차 최대 분석 건수 (남으면 다음 날 이어서)")
     p.add_argument("--model", default="haiku")
-    p.add_argument("--min-score", type=int, default=65)
+    p.add_argument("--min-score", type=int, default=70, help="완료 알림에 올릴 고적합 공고 기준")
     p.set_defaults(func=cmd_daily)
+
+    p = sub.add_parser("check")
+    p.add_argument("--dry-run", action="store_true", help="보내지 않고 메시지만 출력")
+    p.set_defaults(func=cmd_check)
 
     args = ap.parse_args()
     args.func(args)

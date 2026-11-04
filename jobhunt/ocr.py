@@ -18,7 +18,7 @@ from urllib.parse import urljoin
 from curl_cffi import requests
 from PIL import Image
 
-from . import llm
+from . import batch_status, llm
 from .db import get_conn
 
 MAX_WIDTH = 1000
@@ -78,7 +78,8 @@ def ocr(*, max_postings: int = 40, model: str = llm.DEFAULT_MODEL) -> OcrReport:
                ORDER BY first_seen_at DESC, id DESC LIMIT ?""",
             (max_postings,),
         ).fetchall()
-        for r in rows:
+        for n, r in enumerate(rows):
+            batch_status.progress(n, len(rows))
             srcs = json.loads(r["body_images"] or "[]")
             images = []
             for src in srcs:

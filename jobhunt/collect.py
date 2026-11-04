@@ -6,7 +6,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import profile
+from . import batch_status, profile
 from .db import get_conn
 from .sources import jobkorea, saramin, wanted
 
@@ -157,7 +157,8 @@ def collect(*, max_pages: int | None = None, detail_sleep: float = 0.3,
     by_name = {s.SOURCE: s for s in SOURCES}
 
     with get_conn() as conn:
-        for src in srcs:
+        for n, src in enumerate(srcs):
+            batch_status.progress(n, len(srcs))
             try:   # 한 사이트가 막혀도 나머지는 진행
                 rep.per_source[src.SOURCE] = _collect_list(conn, src, max_pages)
             except Exception as e:  # noqa: BLE001
@@ -174,7 +175,8 @@ def collect(*, max_pages: int | None = None, detail_sleep: float = 0.3,
             [s.SOURCE for s in srcs],
         ).fetchall()
         blocked: set[str] = set()
-        for row in todo:
+        for n, row in enumerate(todo):
+            batch_status.progress(n, len(todo))
             if row["source"] in blocked:
                 continue
             try:
@@ -293,7 +295,8 @@ def refresh_companies(*, max_age_days: int = 30, sleep: float = 0.3) -> tuple[in
             (f"-{max_age_days} days",),
         ).fetchall()
         blocked: set[str] = set()
-        for r in todo:
+        for n, r in enumerate(todo):
+            batch_status.progress(n, len(todo))
             if r["source"] in blocked:
                 continue
             mod = by_name[r["source"]]
@@ -318,7 +321,8 @@ def refresh_companies(*, max_age_days: int = 30, sleep: float = 0.3) -> tuple[in
                  AND (fin_checked_at IS NULL OR fin_checked_at < datetime('now','localtime', ?))""",
             (wanted.SOURCE, f"-{max_age_days} days"),
         ).fetchall()
-        for r in enrich:
+        for n, r in enumerate(enrich):
+            batch_status.progress(n, len(enrich))
             try:
                 _enrich_from_saramin(conn, r["external_id"], r["name"], r["founded_year"],
                                      json.loads(r["tags"] or "[]"))
