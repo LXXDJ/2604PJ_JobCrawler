@@ -77,18 +77,29 @@ def _years(career_type: str | None, career_range) -> tuple[int | None, int | Non
     return None, None
 
 
+# areaCodeList 첫 글자 → 시·도 (2026-11-04 확인. 위치 문구가 "역삼 언주" 처럼 역 이름뿐이라 시·도를 붙임)
+# 서울·경기·인천 외 글자는 지역을 다 확인하진 않았지만 수도권이 아닌 건 확실 → "지방"
+_AREA = {"I": "서울", "B": "경기", "K": "인천", "R": "해외"}
+
+
+def _location(c: dict) -> str | None:
+    loc = " ".join((c.get("_internal_featureLocationCode") or "").split(",")[:2])
+    code = next(iter(c.get("areaCodeList") or []), "")
+    sido = _AREA.get(code[:1], "지방") if code[:1].isalpha() and code[:1] != "Q" else ""   # Q·숫자 = 전국
+    return " ".join(x for x in (sido, loc) if x) or None
+
+
 def _to_item(c: dict) -> ListItem:
     yf, yt = _years(c.get("careerType"), c.get("careerRange"))
     end = ((c.get("applicationPeriod") or {}).get("end") or "")[:10]
     duty = c.get("jobClassificationOrIndustry") or ""
-    loc = c.get("_internal_featureLocationCode") or ""
     return ListItem(
         external_id=str(c["id"]),
         url=f"{BASE}/Recruit/GI_Read/{c['id']}",
         title=c.get("title") or "",
         company=c.get("companyName") or c.get("postingCompanyName") or "",
         company_id=c.get("memberSystemNo"),
-        location=" ".join(loc.split(",")[:2]) or None,
+        location=_location(c),
         years_from=yf, years_to=yt,
         due_date=end if end and end < "2060" else None,   # 상시채용은 2070-01-01·9999-… 같은 먼 날짜로 옴
         category_ids=[x for x in duty.split(",") if x],
