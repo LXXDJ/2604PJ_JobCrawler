@@ -63,7 +63,8 @@ def _run(prompt: str, *, system: str, model: str, extra: list[str], cwd: str, ti
 def call_json(prompt: str, *, system: str, schema: dict, model: str = DEFAULT_MODEL,
               timeout: int = 300) -> dict:
     """프롬프트를 보내고 schema 에 맞는 JSON(dict) 을 돌려받는다."""
-    with tempfile.TemporaryDirectory(prefix="jobhunt_llm_") as cwd:
+    # claude 하위 프로세스가 폴더를 늦게 놓아주면 Windows 에서 삭제가 실패함 → 정리 실패는 무시
+    with tempfile.TemporaryDirectory(prefix="jobhunt_llm_", ignore_cleanup_errors=True) as cwd:
         out = _run(prompt, system=system, model=model, cwd=cwd, timeout=timeout,
                    extra=["--json-schema", json.dumps(schema, ensure_ascii=False), "--tools", ""])
     data = out.get("structured_output")
