@@ -121,7 +121,7 @@ def cmd_companies(args) -> None:
 def cmd_ocr(args) -> None:
     t = time.time()
     rep = run_ocr(max_postings=args.max, model=args.model)
-    print(f"[ocr] processed={rep.processed} no_image={rep.no_image} "
+    print(f"[ocr] processed={rep.processed} no_image={rep.no_image} download_failed={rep.download_failed} "
           f"errors={len(rep.errors)} ({time.time() - t:.0f}s)")
     for e in rep.errors[:5]:
         print(f"  ! {e}")
@@ -183,6 +183,7 @@ def _collect_step() -> None:
     if not rep.per_source:
         raise RuntimeError(f"모든 사이트 목록 수집 실패: {rep.errors[0] if rep.errors else '-'}")
     batch_status.update(collect={
+        "new": sum(s["new"] for s in rep.per_source.values()),
         "new_matched": sum(s["new_matched"] for s in rep.per_source.values()),
         "closed": sum(s["closed"] for s in rep.per_source.values()) + rep.closed_expired,
     })

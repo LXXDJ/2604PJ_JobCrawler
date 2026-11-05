@@ -122,6 +122,7 @@ _MIGRATIONS = [
     ("postings", "body_images", "TEXT"),   # JSON list — 이미지 통짜 공고의 이미지 URL (OCR 대비 보존)
     ("postings", "dup_of", "INTEGER"),     # 다른 사이트에 같은 공고가 있으면 대표 공고 id (LLM 분석은 대표만)
     ("postings", "ocr_at", "TEXT"),        # 이미지 공고 OCR 시각 (결과는 body 에 합침, ocr.py)
+    ("postings", "ocr_fails", "INTEGER"),  # 이미지 다운로드 실패 횟수 — OCR_MAX_FAILS 회면 ocr_at 을 찍고 포기
     # 회사 규모·재무 (사람인: NICE·국민연금 / 잡코리아 회사 페이지). 원티드 회사는 사람인에서 이름+설립연도로 찾아 채움
     ("companies", "employees", "INTEGER"),
     ("companies", "revenue_eok", "REAL"),       # 매출액 (억원)

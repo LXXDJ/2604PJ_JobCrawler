@@ -27,6 +27,7 @@ CHUNK_H = 1100
 OVERLAP = 40
 MAX_CHUNKS = 14             # 공고 1건당 상한 (≈ 세로 15,000px)
 MIN_SIDE = 200              # 이보다 작은 이미지는 로고·아이콘으로 보고 버림
+OCR_MAX_FAILS = 3           # 이미지 다운로드가 이만큼 (회차별로) 실패하면 포기 → 알림의 "자동 분석 불가"
 
 SYSTEM = "너는 이미지 속 글자를 정확히 옮겨 적는 OCR 도구다. 영문 기술 용어는 철자 그대로 적는다."
 
@@ -35,6 +36,7 @@ SYSTEM = "너는 이미지 속 글자를 정확히 옮겨 적는 OCR 도구다. 
 class OcrReport:
     processed: int = 0
     no_image: int = 0
+    download_failed: int = 0    # LLM 오류가 아니라서 errors 와 따로 셈 (단계 실패 판정에 안 씀)
     errors: list[str] = field(default_factory=list)
 
 
@@ -80,7 +82,7 @@ def ocr(*, max_postings: int = 40, model: str = llm.DEFAULT_MODEL) -> OcrReport:
     s = requests.Session(impersonate="chrome124")
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT id, url, body, body_images FROM postings
+            """SELECT id, url, body, body_images, ocr_fails FROM postings
                WHERE matched=1 AND status='open' AND dup_of IS NULL AND detail_fetched_at IS NOT NULL
                  AND main_tasks IS NULL AND requirements IS NULL AND length(coalesce(body,'')) < 150
                  AND ocr_at IS NULL
@@ -99,13 +101,24 @@ def ocr(*, max_postings: int = 40, model: str = llm.DEFAULT_MODEL) -> OcrReport:
                 if im:
                     images.append(im)
                 time.sleep(0.2)
+            if not images and srcs:
+                # 이미지 주소는 있는데 못 받음 — 일시 오류일 수 있어 다음 회차 재시도, OCR_MAX_FAILS 회면 포기
+                fails = (r["ocr_fails"] or 0) + 1
+                conn.execute(
+                    """UPDATE postings SET ocr_fails=?,
+                         ocr_at=CASE WHEN ? >= ? THEN datetime('now','localtime') END WHERE id=?""",
+                    (fails, fails, OCR_MAX_FAILS, r["id"]),
+                )
+                conn.commit()
+                rep.download_failed += 1
+                continue
             if not images:
-                # 읽을 이미지가 없음 — 다시 시도해도 같으므로 ocr_at 만 찍고 넘어감
+                # 이미지 주소 자체가 없음 — 다시 시도해도 같으므로 ocr_at 만 찍고 넘어감
                 conn.execute("UPDATE postings SET ocr_at=datetime('now','localtime') WHERE id=?", (r["id"],))
                 conn.commit()
                 rep.no_image += 1
                 continue
-            with tempfile.TemporaryDirectory(prefix="jobhunt_ocr_") as d:
+            with tempfile.TemporaryDirectory(prefix="jobhunt_ocr_", ignore_cleanup_errors=True) as d:
                 names = _slices(images, Path(d))
                 prompt = ("현재 폴더의 이미지 " + ", ".join(names) + " 는 하나의 채용공고를 위에서부터 순서대로 자른 조각이다. "
                           "Read 도구로 순서대로 모두 읽고 공고 텍스트를 빠짐없이 그대로 옮겨 적어라. "

@@ -12,7 +12,9 @@ from crawlers.infra.notify import slack_notify
 from . import batch_status
 from .batch_status import STEP_LABEL, STEPS
 from .db import get_conn
+from .extract import ANALYZABLE_SQL
 from .fit import label_key as _label_key
+from .ocr import OCR_MAX_FAILS
 
 # 팀 프로젝트 SLACK_WEBHOOK_URL 로 새지 않도록 개인용 웹훅만 사용 (fallback 없음)
 WEBHOOK = os.getenv("JOBHUNT_SLACK_WEBHOOK_URL", "")
@@ -109,6 +111,14 @@ def _years(lo: int | None, hi: int | None) -> str:
     return f"경력 {lo}~{hi}년"
 
 
+def _stuck_reason(r) -> str:
+    if (r["ocr_fails"] or 0) >= OCR_MAX_FAILS:
+        return "이미지 읽기 실패"
+    if not json.loads(r["body_images"] or "[]"):
+        return "본문·이미지 없음"
+    return "이미지에서 읽은 글자가 너무 적음"
+
+
 def _steps_line(st: dict) -> str:
     done = set(st.get("completed_steps") or [])
     failed = {f["step"] for f in st.get("failures") or []}
@@ -130,6 +140,12 @@ def daily_done_message(st: dict, *, min_score: int = HIGH_FIT, top: int = 5) -> 
         by_src = dict(conn.execute(f"SELECT p.source, COUNT(*) {_OPEN_REP} GROUP BY p.source").fetchall())
         analyzed = q(f"SELECT COUNT(*) {_OPEN_REP} AND p.id IN (SELECT posting_id FROM insights)")
         careered = q(f"SELECT COUNT(*) {_OPEN_REP} AND p.id IN (SELECT posting_id FROM career)")
+        # 내일 배치로 넘겨도 처리 안 되는 공고 — 상세는 받았는데 본문이 짧고 OCR 도 끝(포기)난 것
+        stuck = conn.execute(
+            f"""SELECT p.company, p.title, p.url, p.body_images, p.ocr_fails {_OPEN_REP}
+                  AND p.id NOT IN (SELECT posting_id FROM insights) AND p.detail_fetched_at IS NOT NULL
+                  AND p.ocr_at IS NOT NULL AND NOT {ANALYZABLE_SQL}
+                ORDER BY p.first_seen_at DESC""").fetchall()
         hot = conn.execute(
             f"""SELECT p.id, p.title, p.company, p.url, p.years_from, p.years_to, i.fit_score
                 FROM postings p JOIN insights i ON i.posting_id = p.id
@@ -146,15 +162,26 @@ def daily_done_message(st: dict, *, min_score: int = HIGH_FIT, top: int = 5) -> 
         f"✅ 이직 공고 배치 완료 — {_day(start)} {start:%H:%M} → {end:%H:%M} ({_dur(start, end)})",
         "",
         "📥 수집",
-        f"  • 전체 공고 {open_all:,}건 (진행 중)",
-        f"  • 내 조건에 맞는 공고 {matched:,}건  ← {src_txt}",
-        f"  • 오늘 새로 들어온 공고 {col.get('new_matched', 0):,}건 / 마감 처리 {col.get('closed', 0):,}건",
+        f"  • 전체 공고 {open_all:,}건" + (f" (오늘 신규 {col['new']:,}건)" if "new" in col else ""),
+        f"  • 내 조건에 맞는 공고 {matched:,}건 (오늘 신규 {col.get('new_matched', 0):,}건)  ← {src_txt}",
+        f"  • 마감 처리 {col.get('closed', 0):,}건",
         "",
         "🤖 LLM 분석 진행률",
         f"  • 공고 분석   {analyzed:,} / {matched:,}건  ({analyzed / total:.1%})  {_bar(analyzed / total)}",
         f"  • 커리어 평가 {careered:,} / {matched:,}건  ({careered / total:.1%})  {_bar(careered / total)}",
-        f"  • 남은 분석 {left:,}건 → 내일 배치에서 처리" if left else "  • 모든 공고 분석 완료",
     ]
+    if not left:
+        lines.append("  • 모든 공고 분석 완료")
+    else:
+        lines.append(f"  • 남은 분석 {left:,}건")
+        if left > len(stuck):
+            lines.append(f"     – 내일 배치에서 처리 {left - len(stuck):,}건")
+        if stuck:
+            lines.append(f"     – 자동 분석 불가 {len(stuck)}건 → 직접 확인")
+            for r in stuck[:top]:
+                lines.append(f"         · {_esc(r['company'])} — <{r['url']}|{_esc(r['title'])}> ({_stuck_reason(r)})")
+            if len(stuck) > top:
+                lines.append(f"         · 외 {len(stuck) - top}건")
     if hot:
         lines += ["", f"⭐ 오늘 새로 들어온 고적합 공고 (적합도 {min_score}점 이상) {len(hot)}건"]
         for n, r in enumerate(hot[:top], 1):
